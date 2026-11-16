@@ -1,24 +1,29 @@
 package com.clem.ioslock
 
+import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
-import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.MediaStore
 import android.util.Property
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
@@ -29,21 +34,25 @@ import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextClock
 import android.widget.TextView
+import androidx.activity.ComponentActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import java.io.File
 
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 
 /**
  * L'écran de verrouillage façon iOS : heure, date, cadenas, lampe, appareil photo,
- * balayage vers le haut, clavier de code, animations de réveil et de déverrouillage.
+ * balayage vers le haut, clavier de code, déverrouillage par le visage,
+ * animations de réveil et de déverrouillage.
  */
-class LockActivity : Activity() {
+class LockActivity : ComponentActivity() {
 
     private var preview = false
     private var savedCode = ""
@@ -51,9 +60,15 @@ class LockActivity : Activity() {
     private var codeMode = false
     private var unlocking = false
     private var torchOn = false
+    private var leaving = false
+    private var hasWallpaper = false
+    private var faceOk = false
+    private var consec = 0
     private val typed = StringBuilder()
     private val handler = Handler(Looper.getMainLooper())
     private val loops = ArrayList<ObjectAnimator>()
+    private var scanAnim: ObjectAnimator? = null
+    private val face = FaceAuth(this)
 
     private lateinit var root: FrameLayout
     private lateinit var lockLayer: FrameLayout
@@ -132,27 +147,52 @@ class LockActivity : Activity() {
             )
         )
 
-        // Taches lumineuses qui flottent
-        val g1 = GlowView(this, 0x99FFB36B.toInt())
-        root.addView(
-            g1,
-            FrameLayout.LayoutParams(dp(420), dp(420), Gravity.TOP or Gravity.END).apply {
-                topMargin = -dp(120)
-                rightMargin = -dp(160)
+        // Fond d'écran choisi dans l'appli
+        val wp = File(filesDir, "wallpaper.jpg")
+        if (wp.exists()) {
+            val bmp = try {
+                BitmapFactory.decodeFile(wp.path)
+            } catch (e: Exception) {
+                null
             }
-        )
-        val g2 = GlowView(this, 0x8860A5FA.toInt())
-        root.addView(
-            g2,
-            FrameLayout.LayoutParams(dp(460), dp(460), Gravity.BOTTOM or Gravity.START).apply {
-                bottomMargin = -dp(150)
-                leftMargin = -dp(170)
+            if (bmp != null) {
+                hasWallpaper = true
+                val iv = ImageView(this)
+                iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                iv.setImageBitmap(bmp)
+                root.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
+                val shade = View(this)
+                shade.background = GradientDrawable(
+                    GradientDrawable.Orientation.TOP_BOTTOM,
+                    intArrayOf(0x66000000, 0x00000000, 0x77000000)
+                )
+                root.addView(shade, FrameLayout.LayoutParams(MATCH, MATCH))
             }
-        )
-        floatLoop(g1, View.TRANSLATION_X, -dpf(70f), 9000)
-        floatLoop(g1, View.TRANSLATION_Y, dpf(60f), 11000)
-        floatLoop(g2, View.TRANSLATION_X, dpf(80f), 10000)
-        floatLoop(g2, View.TRANSLATION_Y, -dpf(70f), 12000)
+        }
+
+        // Taches lumineuses qui flottent (seulement sans fond d'écran perso)
+        if (!hasWallpaper) {
+            val g1 = GlowView(this, 0x99FFB36B.toInt())
+            root.addView(
+                g1,
+                FrameLayout.LayoutParams(dp(420), dp(420), Gravity.TOP or Gravity.END).apply {
+                    topMargin = -dp(120)
+                    rightMargin = -dp(160)
+                }
+            )
+            val g2 = GlowView(this, 0x8860A5FA.toInt())
+            root.addView(
+                g2,
+                FrameLayout.LayoutParams(dp(460), dp(460), Gravity.BOTTOM or Gravity.START).apply {
+                    bottomMargin = -dp(150)
+                    leftMargin = -dp(170)
+                }
+            )
+            floatLoop(g1, View.TRANSLATION_X, -dpf(70f), 9000)
+            floatLoop(g1, View.TRANSLATION_Y, dpf(60f), 11000)
+            floatLoop(g2, View.TRANSLATION_X, dpf(80f), 10000)
+            floatLoop(g2, View.TRANSLATION_Y, -dpf(70f), 12000)
+        }
 
         // ---- Écran principal (heure, date, boutons)
         lockLayer = FrameLayout(this)
@@ -178,7 +218,7 @@ class LockActivity : Activity() {
             format12Hour = "h:mm"
             format24Hour = "H:mm"
             setTextColor(0xF2FFFFFF.toInt())
-            textSize = 100f
+            textSize = Prefs.clockSize(this@LockActivity).toFloat()
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             includeFontPadding = false
             letterSpacing = -0.02f
@@ -186,7 +226,10 @@ class LockActivity : Activity() {
         }
         header.addView(time, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = -dp(4) })
 
-        lockLayer.addView(header, FrameLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(70) })
+        lockLayer.addView(
+            header,
+            FrameLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(Prefs.clockTop(this@LockActivity)) }
+        )
 
         torchBtn = ControlButton(this, ControlButton.TORCH) { toggleTorch() }
         camBtn = ControlButton(this, ControlButton.CAMERA) { openCamera() }
@@ -381,11 +424,14 @@ class LockActivity : Activity() {
     private fun playIntro() {
         codeMode = false
         unlocking = false
+        faceOk = false
         handler.removeCallbacksAndMessages(null)
+        stopFace()
         typed.setLength(0)
         updateDots()
         actionText.text = "Annuler"
         codeTitle.text = "Entrez le code"
+        hint.text = "Balayer vers le haut pour ouvrir"
 
         codeLayer.animate().cancel()
         codeLayer.visibility = View.GONE
@@ -426,6 +472,9 @@ class LockActivity : Activity() {
         homeBar.alpha = 0f
         homeBar.animate().setStartDelay(250).translationY(0f).alpha(0.9f).setDuration(450)
             .setInterpolator(DecelerateInterpolator()).start()
+
+        // Après l'animation de réveil, on cherche ton visage
+        handler.postDelayed({ startFace() }, 500)
     }
 
     private fun applyDrag(dy: Float) {
@@ -436,7 +485,7 @@ class LockActivity : Activity() {
         val s = 1f - p * 0.06f
         lockLayer.scaleX = s
         lockLayer.scaleY = s
-        if (savedCode.isNotEmpty()) {
+        if (savedCode.isNotEmpty() && !faceOk) {
             codeLayer.visibility = View.VISIBLE
             codeLayer.alpha = p * p
             codeLayer.translationY = dpf(40f) * (1f - p)
@@ -454,10 +503,11 @@ class LockActivity : Activity() {
 
     private fun openCode() {
         if (codeMode || unlocking) return
-        if (savedCode.isEmpty()) {
+        if (savedCode.isEmpty() || faceOk) {
             unlock()
             return
         }
+        stopFace()
         codeMode = true
         codeLayer.visibility = View.VISIBLE
         lockLayer.animate().setStartDelay(0).translationY(-dpf(80f)).alpha(0f)
@@ -478,6 +528,66 @@ class LockActivity : Activity() {
             .withEndAction { if (!codeMode) codeLayer.visibility = View.GONE }.start()
         lockLayer.animate().setStartDelay(0).translationY(0f).alpha(1f).scaleX(1f).scaleY(1f)
             .setDuration(380).setInterpolator(OvershootInterpolator(1.1f)).start()
+    }
+
+    // ------------------------------------------------------------------ Visage
+
+    private fun faceReady(): Boolean {
+        return savedCode.isNotEmpty() &&
+            Prefs.faceEnabled(this) &&
+            Prefs.face(this) != null &&
+            checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun startFace() {
+        if (unlocking || codeMode || faceOk) return
+        if (!faceReady()) return
+        val ref = Prefs.face(this) ?: return
+        val tol = Prefs.faceTol(this)
+        consec = 0
+        scanAnim?.cancel()
+        scanAnim = ObjectAnimator.ofFloat(lockIcon, View.ALPHA, 0.35f, 1f).apply {
+            duration = 450
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            start()
+        }
+        face.start(null) { v ->
+            if (!faceOk && !unlocking && !codeMode) {
+                if (FaceMatch.distance(v, ref) < tol) consec++ else consec = 0
+                if (consec >= 3) onFaceSuccess()
+            }
+        }
+        handler.postDelayed({ onFaceTimeout() }, 5000)
+    }
+
+    private fun stopFace() {
+        scanAnim?.cancel()
+        scanAnim = null
+        if (::lockIcon.isInitialized) lockIcon.alpha = 1f
+        face.stop()
+    }
+
+    private fun onFaceSuccess() {
+        if (faceOk) return
+        stopFace()
+        faceOk = true
+        lockIcon.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        lockIcon.animateTo(1f, 300)
+        hint.text = "Visage reconnu · balayer vers le haut"
+    }
+
+    private fun onFaceTimeout() {
+        if (faceOk) return
+        stopFace()
+        hint.text = "Visage non reconnu · balayer pour utiliser le code"
+        ObjectAnimator.ofFloat(
+            lockIcon, View.TRANSLATION_X,
+            0f, -dpf(10f), dpf(10f), -dpf(7f), dpf(7f), -dpf(3f), dpf(3f), 0f
+        ).apply {
+            duration = 380
+            start()
+        }
     }
 
     // ------------------------------------------------------------------ Code
@@ -542,6 +652,7 @@ class LockActivity : Activity() {
     private fun unlock() {
         if (unlocking) return
         unlocking = true
+        stopFace()
         val icon = if (codeMode) codeLock else lockIcon
         icon.animateTo(1f, 260)
         handler.postDelayed({
@@ -557,7 +668,7 @@ class LockActivity : Activity() {
             closeNow()
             return
         }
-        // Si le Samsung a un code / une empreinte, le système les demande ici.
+        // Si le Samsung a encore un code / une empreinte, le système les demande ici.
         km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
             override fun onDismissSucceeded() {
                 closeNow()
@@ -594,6 +705,8 @@ class LockActivity : Activity() {
     }
 
     private fun openCamera() {
+        leaving = true
+        stopFace()
         val flags = Intent.FLAG_ACTIVITY_NEW_TASK
         try {
             startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA_SECURE).addFlags(flags))
@@ -601,6 +714,7 @@ class LockActivity : Activity() {
             try {
                 startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).addFlags(flags))
             } catch (e2: Exception) {
+                leaving = false
             }
         }
     }
@@ -622,6 +736,40 @@ class LockActivity : Activity() {
         playIntro()
     }
 
+    override fun onResume() {
+        super.onResume()
+        leaving = false
+    }
+
+    /**
+     * Verrouillage strict : si on essaie de quitter l'écran (Accueil, applis récentes)
+     * sans avoir mis le code ou montré son visage, l'écran revient aussitôt.
+     */
+    override fun onStop() {
+        super.onStop()
+        stopFace()
+        if (isFinishing || unlocking || preview || leaving) return
+        if (savedCode.isEmpty() || !Prefs.strict(this)) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!pm.isInteractive) return
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (am.mode != AudioManager.MODE_NORMAL) return
+        handler.postDelayed({ relaunch() }, 150)
+    }
+
+    private fun relaunch() {
+        try {
+            startActivity(
+                Intent(this, LockActivity::class.java).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                )
+            )
+        } catch (e: Exception) {
+        }
+    }
+
     @Suppress("DEPRECATION")
     override fun onBackPressed() {
         if (codeMode) {
@@ -634,6 +782,8 @@ class LockActivity : Activity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         loops.forEach { it.cancel() }
+        scanAnim?.cancel()
+        face.release()
         super.onDestroy()
     }
 }

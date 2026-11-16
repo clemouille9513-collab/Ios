@@ -1,23 +1,17 @@
 # Écran de verrouillage iOS pour Samsung
 
-Projet Android (Kotlin, sans dépendance externe à part androidx.core).
-
-## Obtenir l'APK sans PC (GitHub)
-1. Crée un dépôt GitHub et envoie-y tout le contenu de ce dossier (y compris le dossier `.github`).
-2. Onglet **Actions** > **Build APK** > **Run workflow**.
-3. Quand c'est vert, ouvre l'exécution et télécharge l'artefact `ioslock-apk` (un zip avec `app-debug.apk`).
-4. Installe l'APK sur le téléphone (autorise les sources inconnues).
-
-## Avec Android Studio (PC)
-Ouvre le dossier, laisse Gradle se synchroniser, puis Build > Build APK(s).
+Projet Android (Kotlin). L'APK se compile tout seul sur GitHub (onglet Actions > Build APK > artefact `ioslock-apk`).
 
 ## Réglages sur le téléphone
-1. Ouvre l'appli « Écran iOS ».
-2. Autorise l'affichage par-dessus les autres applis, les notifications, et désactive l'optimisation de batterie.
-3. (Facultatif) choisis un code. Vide = ton verrouillage Samsung (empreinte / code) est demandé après le balayage.
-4. Active l'interrupteur. Éteins puis rallume l'écran : l'écran iOS apparaît.
+1. Ouvre l'appli « Écran iOS » et accorde les autorisations (affichage par-dessus les autres applis, notifications, batterie).
+2. Choisis un code (4 à 6 chiffres).
+3. Visage : « Enregistrer mon visage », puis active « Déverrouiller avec le visage ».
+4. Apparence : fond d'écran au choix, hauteur et taille de l'heure.
+5. Sécurité : dans les réglages Samsung, mets le verrouillage sur « Balayer » ou « Aucun », et laisse « Verrouillage strict » activé.
+6. Active l'interrupteur. Éteins puis rallume l'écran.
 
 ## Limites
-- Android n'autorise pas à remplacer l'écran de verrouillage système : l'appli s'affiche par-dessus.
-- Garde un verrouillage Samsung (code ou empreinte) si tu veux une vraie sécurité : le bouton Accueil peut contourner l'écran quand le Samsung est réglé sur « Balayer ».
-- Pas encore : notifications sur l'écran, fond d'écran personnalisé, widgets.
+- Android ne permet pas de remplacer l'écran de verrouillage du système : l'appli s'affiche par-dessus et revient aussitôt si on essaie de la quitter (mode strict). Le bouton d'éteignement, le redémarrage ou le mode sans échec restent possibles.
+- La reconnaissance du visage est simple (points du visage via ML Kit, sans détection de photo ou de vidéo). Elle est moins sûre que le Face ID : garde un code solide.
+- Le fond d'écran officiel de l'iPhone n'est pas inclus : choisis l'image dans l'appli.
+- Pas encore : notifications sur l'écran, widgets.
