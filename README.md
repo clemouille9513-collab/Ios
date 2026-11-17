@@ -2,16 +2,21 @@
 
 Projet Android (Kotlin). L'APK se compile tout seul sur GitHub (onglet Actions > Build APK > artefact `ioslock-apk`).
 
+## Comment ça marche
+Un service d'accessibilité pose l'écran dans une fenêtre système qui passe au-dessus de tout (applis, barre d'état, barre de navigation) et absorbe tous les touchers. La fenêtre est créée une fois et préparée quand l'écran s'éteint : au rallumage, elle est déjà là et seules les animations se jouent.
+
 ## Réglages sur le téléphone
-1. Ouvre l'appli « Écran iOS » et accorde les autorisations (affichage par-dessus les autres applis, notifications, batterie).
-2. Choisis un code (4 à 6 chiffres).
-3. Visage : « Enregistrer mon visage », puis active « Déverrouiller avec le visage ».
-4. Apparence : fond d'écran au choix, hauteur et taille de l'heure.
-5. Sécurité : dans les réglages Samsung, mets le verrouillage sur « Balayer » ou « Aucun », et laisse « Verrouillage strict » activé.
-6. Active l'interrupteur. Éteins puis rallume l'écran.
+1. Ouvre l'appli « Écran iOS », active le service d'accessibilité (si Android refuse : infos de l'appli > ⋮ > « Autoriser les paramètres restreints »), autorise la caméra.
+2. Choisis un code, enregistre ton visage, règle le fond et l'heure.
+3. Active l'interrupteur. Éteins puis rallume l'écran.
+
+## Verrouillage Samsung
+- Sans verrouillage Samsung (« Aucun ») : code + visage. C'est ton écran qui protège le téléphone.
+- Avec un verrouillage Samsung (code + empreinte) : l'empreinte déverrouille aussi (le système Samsung la lit et l'écran iOS s'ouvre).
+  Android efface les empreintes si on supprime le verrouillage : les deux ne vont pas ensemble.
 
 ## Limites
-- Android ne permet pas de remplacer l'écran de verrouillage du système : l'appli s'affiche par-dessus et revient aussitôt si on essaie de la quitter (mode strict). Le bouton d'éteignement, le redémarrage ou le mode sans échec restent possibles.
-- La reconnaissance du visage est simple (points du visage via ML Kit, sans détection de photo ou de vidéo). Elle est moins sûre que le Face ID : garde un code solide.
-- Le fond d'écran officiel de l'iPhone n'est pas inclus : choisis l'image dans l'appli.
-- Pas encore : notifications sur l'écran, widgets.
+- Le bouton d'éteignement, le redémarrage et le mode sans échec restent possibles : aucune appli ne peut les bloquer.
+- Si tu oublies le code : mode sans échec (maintiens le bouton d'éteignement, appui long sur « Éteindre ») puis désinstalle l'appli.
+- Reconnaissance du visage simple (points du visage via ML Kit, sans détection de photo ou de vidéo) : moins sûre que le Face ID.
+- Écran prévu pour le mode portrait.

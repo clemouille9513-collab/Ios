@@ -10,7 +10,6 @@ import android.graphics.Matrix
 import android.graphics.Typeface
 import android.media.ExifInterface
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputFilter
@@ -28,6 +27,8 @@ import java.io.File
 import java.io.FileOutputStream
 
 class MainActivity : Activity() {
+
+    private lateinit var statusTv: TextView
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
@@ -91,30 +92,39 @@ class MainActivity : Activity() {
         text("Écran de verrouillage iOS", 26f, Color.WHITE, true)
         text("Le look de l'écran de verrouillage de l'iPhone, sur ton Samsung.", 14f, grey, false, 6)
 
-        // ------------------------------------------------------------ 1. Autorisations
-        text("1. Autorisations", 16f, Color.WHITE, true, 28)
-        button("Autoriser l'affichage par-dessus les autres applis") {
+        // ------------------------------------------------------------ 1. Service
+        text("1. Service d'accessibilité (obligatoire)", 16f, Color.WHITE, true, 28)
+        text(
+            "C'est lui qui pose l'écran par-dessus tout, avant même que l'écran se rallume, et qui bloque tout le reste. Il ne lit rien de ce qui s'affiche.",
+            13f, grey, false, 4
+        )
+        statusTv = TextView(this)
+        statusTv.textSize = 15f
+        statusTv.setTypeface(null, Typeface.BOLD)
+        col.addView(statusTv, lp(8))
+        button("Ouvrir les réglages d'accessibilité") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+        text(
+            "Cherche « Écran iOS » dans les applis installées et active-le. Si Android refuse (« paramètre restreint ») : ouvre d'abord les infos de l'appli, touche les trois points en haut à droite, puis « Autoriser les paramètres restreints ».",
+            12f, grey, false, 6
+        )
+        button("Ouvrir les infos de l'appli") {
             startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
             )
         }
-        button("Autoriser les notifications") {
-            if (Build.VERSION.SDK_INT >= 33) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-            }
+        button("Autoriser la caméra (visage et photos)") {
+            requestPermissions(arrayOf(Manifest.permission.CAMERA), 2)
         }
         button("Désactiver l'optimisation de batterie") {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
-        text(
-            "Dans les réglages Samsung, mets aussi l'appli en « Jamais en veille » (Batterie > Limites d'utilisation en arrière-plan).",
-            12f, grey, false, 6
-        )
 
         // ------------------------------------------------------------ 2. Code
         text("2. Code", 16f, Color.WHITE, true, 28)
         text(
-            "Choisis un code de 4 à 6 chiffres : c'est lui qui verrouille ton téléphone. Laisse vide pour garder le verrouillage de ton Samsung (empreinte, code...).",
+            "Choisis un code de 4 à 6 chiffres : c'est lui qui verrouille ton téléphone. Sans code, un simple balayage déverrouille.",
             13f, grey, false, 4
         )
         val et = EditText(this)
@@ -174,8 +184,17 @@ class MainActivity : Activity() {
             12f, grey, false, 4
         )
 
-        // ------------------------------------------------------------ 4. Apparence
-        text("4. Apparence", 16f, Color.WHITE, true, 28)
+        // ------------------------------------------------------------ 4. Empreinte
+        text("4. Empreinte digitale", 16f, Color.WHITE, true, 28)
+        text(
+            "Android efface les empreintes dès qu'on enlève le verrouillage Samsung, et aucune appli ne peut lire le capteur sans lui. Deux façons de faire :\n\n" +
+                "• Sans verrouillage Samsung (réglage « Aucun ») : code et visage seulement.\n" +
+                "• Avec un verrouillage Samsung (code + empreinte) : touche le capteur, l'écran iOS s'ouvre aussi. Le code ou le visage de l'appli laisse alors l'écran Samsung derrière, qu'il faut déverrouiller à son tour.",
+            13f, grey, false, 4
+        )
+
+        // ------------------------------------------------------------ 5. Apparence
+        text("5. Apparence", 16f, Color.WHITE, true, 28)
         button("Choisir le fond d'écran") {
             val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
             i.addCategory(Intent.CATEGORY_OPENABLE)
@@ -189,23 +208,6 @@ class MainActivity : Activity() {
         slider("Hauteur de l'heure", " dp", 20, 260, Prefs.clockTop(this)) { Prefs.setClockTop(this, it) }
         slider("Taille de l'heure", " sp", 50, 120, Prefs.clockSize(this)) { Prefs.setClockSize(this, it) }
 
-        // ------------------------------------------------------------ 5. Sécurité
-        text("5. Sécurité", 16f, Color.WHITE, true, 28)
-        text(
-            "Pour que seul ce verrouillage protège le téléphone : dans les réglages Samsung > Écran de verrouillage > Type de verrouillage, choisis « Balayer » ou « Aucun ».",
-            13f, grey, false, 4
-        )
-        val strictSw = Switch(this)
-        strictSw.text = "Verrouillage strict"
-        strictSw.setTextColor(Color.WHITE)
-        strictSw.isChecked = Prefs.strict(this)
-        strictSw.setOnCheckedChangeListener { _, on -> Prefs.setStrict(this, on) }
-        col.addView(strictSw, lp(10))
-        text(
-            "Si quelqu'un appuie sur Accueil ou sur les applis récentes sans avoir mis le code ou montré son visage, l'écran de verrouillage revient aussitôt. Le bouton d'éteignement et le redémarrage restent possibles.",
-            12f, grey, false, 4
-        )
-
         // ------------------------------------------------------------ 6. Activer
         text("6. Activer", 16f, Color.WHITE, true, 28)
         val sw = Switch(this)
@@ -214,25 +216,44 @@ class MainActivity : Activity() {
         sw.isChecked = Prefs.enabled(this)
         sw.setOnCheckedChangeListener { b, on ->
             if (on) {
-                if (!Settings.canDrawOverlays(this)) {
-                    toast("Autorise d'abord l'affichage par-dessus les autres applis")
+                if (LockAccessibilityService.instance == null) {
+                    toast("Active d'abord le service d'accessibilité (étape 1)")
                     b.isChecked = false
                 } else {
                     Prefs.setEnabled(this, true)
-                    startForegroundService(Intent(this, LockService::class.java))
                 }
             } else {
                 Prefs.setEnabled(this, false)
-                stopService(Intent(this, LockService::class.java))
             }
         }
         col.addView(sw, lp(10))
 
         button("Voir l'aperçu de l'écran") {
-            startActivity(Intent(this, LockActivity::class.java).putExtra("preview", true))
+            val s = LockAccessibilityService.instance
+            if (s == null) {
+                toast("Active d'abord le service d'accessibilité (étape 1)")
+            } else {
+                s.showPreview()
+            }
         }
 
+        text(
+            "Si tu oublies ton code : redémarre le téléphone en mode sans échec (maintiens le bouton d'éteignement, puis appuie longuement sur « Éteindre » et valide). L'appli est alors désactivée et tu peux la désinstaller.",
+            12f, grey, false, 24
+        )
+
         setContentView(scroll)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (LockAccessibilityService.instance != null) {
+            statusTv.text = "✓ Service actif"
+            statusTv.setTextColor(0xFF4ADE80.toInt())
+        } else {
+            statusTv.text = "✗ Service inactif"
+            statusTv.setTextColor(0xFFF87171.toInt())
+        }
     }
 
     /** Copie l'image choisie en la redimensionnant et en la remettant droite. */

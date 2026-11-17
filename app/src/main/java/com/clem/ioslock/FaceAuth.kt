@@ -1,6 +1,6 @@
 package com.clem.ioslock
 
-import androidx.activity.ComponentActivity
+import android.content.Context
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -8,6 +8,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.LifecycleOwner
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
@@ -36,7 +37,7 @@ object FaceMatch {
  * et en tire une empreinte faite de rapports de distances.
  * Reconnaissance simple : moins fiable que le Face ID d'Apple.
  */
-class FaceAuth(private val act: ComponentActivity) {
+class FaceAuth(private val ctx: Context, private val owner: LifecycleOwner) {
 
     private var detector: FaceDetector? = null
     private var provider: ProcessCameraProvider? = null
@@ -67,7 +68,7 @@ class FaceAuth(private val act: ComponentActivity) {
         running = true
         busy = false
         onVector = callback
-        val fut = ProcessCameraProvider.getInstance(act)
+        val fut = ProcessCameraProvider.getInstance(ctx)
         fut.addListener(Runnable {
             if (!running) return@Runnable
             val p = fut.get()
@@ -82,13 +83,13 @@ class FaceAuth(private val act: ComponentActivity) {
                 if (previewView != null) {
                     val pv = Preview.Builder().build()
                     pv.setSurfaceProvider(previewView.surfaceProvider)
-                    p.bindToLifecycle(act, CameraSelector.DEFAULT_FRONT_CAMERA, pv, ia)
+                    p.bindToLifecycle(owner, CameraSelector.DEFAULT_FRONT_CAMERA, pv, ia)
                 } else {
-                    p.bindToLifecycle(act, CameraSelector.DEFAULT_FRONT_CAMERA, ia)
+                    p.bindToLifecycle(owner, CameraSelector.DEFAULT_FRONT_CAMERA, ia)
                 }
             } catch (e: Exception) {
             }
-        }, ContextCompat.getMainExecutor(act))
+        }, ContextCompat.getMainExecutor(ctx))
     }
 
     fun stop() {

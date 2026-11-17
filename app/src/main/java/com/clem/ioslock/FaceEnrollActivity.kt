@@ -18,7 +18,7 @@ import androidx.camera.view.PreviewView
 class FaceEnrollActivity : ComponentActivity() {
 
     private val target = 25
-    private val face = FaceAuth(this)
+    private val face = FaceAuth(this, this)
     private val samples = ArrayList<FloatArray>()
     private var done = false
     private lateinit var status: TextView

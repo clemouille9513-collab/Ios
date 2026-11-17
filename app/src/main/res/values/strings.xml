@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_desc">Affiche l\'écran de verrouillage iOS par-dessus tout dès que l\'écran s\'éteint, pour que le téléphone ne se déverrouille qu\'avec le code, le visage ou l\'empreinte. Ce service ne lit aucun contenu à l\'écran.</string>
+</resources>

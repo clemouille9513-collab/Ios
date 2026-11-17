@@ -4,8 +4,8 @@ import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.KeyguardManager
+import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -13,22 +13,18 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
-import android.media.AudioManager
-import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.provider.MediaStore
 import android.util.Property
 import android.view.Gravity
-import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
@@ -38,21 +34,39 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextClock
 import android.widget.TextView
-import androidx.activity.ComponentActivity
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 
 /**
- * L'écran de verrouillage façon iOS : heure, date, cadenas, lampe, appareil photo,
- * balayage vers le haut, clavier de code, déverrouillage par le visage,
- * animations de réveil et de déverrouillage.
+ * L'écran de verrouillage façon iOS, construit une fois et posé dans une fenêtre
+ * système par-dessus tout. Il est prêt avant que l'écran se rallume : aucun délai.
  */
-class LockActivity : ComponentActivity() {
+class LockUi(
+    private val ctx: Context,
+    private val owner: OverlayLifecycle,
+    private val host: Host
+) {
+    interface Host {
+        fun onUnlocked()
+    }
+
+    val root = FrameLayout(ctx)
+    private val handler = Handler(Looper.getMainLooper())
+    private val face = FaceAuth(ctx, owner)
+    private val loops = ArrayList<ObjectAnimator>()
+    private var scanAnim: ObjectAnimator? = null
 
     private var preview = false
     private var savedCode = ""
@@ -60,19 +74,18 @@ class LockActivity : ComponentActivity() {
     private var codeMode = false
     private var unlocking = false
     private var torchOn = false
-    private var leaving = false
     private var hasWallpaper = false
+    private var secureDevice = false
     private var faceOk = false
     private var consec = 0
+    private var cameraOpen = false
+    private var backCam = true
     private val typed = StringBuilder()
-    private val handler = Handler(Looper.getMainLooper())
-    private val loops = ArrayList<ObjectAnimator>()
-    private var scanAnim: ObjectAnimator? = null
-    private val face = FaceAuth(this)
+    private val dots = ArrayList<DotView>()
 
-    private lateinit var root: FrameLayout
     private lateinit var lockLayer: FrameLayout
     private lateinit var codeLayer: FrameLayout
+    private lateinit var camLayer: FrameLayout
     private lateinit var header: LinearLayout
     private lateinit var lockIcon: LockIconView
     private lateinit var codeLock: LockIconView
@@ -83,46 +96,78 @@ class LockActivity : ComponentActivity() {
     private lateinit var codeTitle: TextView
     private lateinit var dotsRow: LinearLayout
     private lateinit var actionText: TextView
-    private val dots = ArrayList<DotView>()
+    private lateinit var camPreview: PreviewView
+    private lateinit var camFlash: View
+    private lateinit var camMsg: TextView
+    private var fpViews: List<View> = emptyList()
+
+    private var camProvider: ProcessCameraProvider? = null
+    private var imageCapture: ImageCapture? = null
 
     private var downY = 0f
     private var tracker: VelocityTracker? = null
 
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-    private fun dpf(v: Float) = v * resources.displayMetrics.density
+    private fun dp(v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
+    private fun dpf(v: Float) = v * ctx.resources.displayMetrics.density
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        preview = intent.getBooleanExtra("preview", false)
-        setShowWhenLocked(true)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.statusBarColor = Color.TRANSPARENT
-        window.navigationBarColor = Color.TRANSPARENT
-        val lp = window.attributes
-        lp.layoutInDisplayCutoutMode =
-            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-        window.attributes = lp
-        hideBars()
+    // ------------------------------------------------------------------ Cycle
+
+    /** Prépare tout (écran éteint) : l'écran est déjà construit quand on le rallume. */
+    fun arm(preview: Boolean) {
+        this.preview = preview
+        handler.removeCallbacksAndMessages(null)
+        stopFace()
+        if (::camLayer.isInitialized) closeCameraNow()
         loadPrefs()
-        buildUi()
-        setContentView(root)
-        root.post { playIntro() }
+        build()
+        resetState()
+        prepareIntro()
+        root.animate().cancel()
+        root.alpha = 1f
+        root.scaleX = 1f
+        root.scaleY = 1f
+    }
+
+    fun abortForCall() {
+        handler.removeCallbacksAndMessages(null)
+        stopFace()
+        if (::camLayer.isInitialized) closeCameraNow()
+    }
+
+    fun destroy() {
+        handler.removeCallbacksAndMessages(null)
+        loops.forEach { it.cancel() }
+        scanAnim?.cancel()
+        face.release()
+    }
+
+    /** Déverrouillé de l'extérieur (empreinte reconnue par le système Samsung). */
+    fun unlockExternal() {
+        if (unlocking) return
+        faceOk = true
+        stopFace()
+        closeCameraNow()
+        unlock()
     }
 
     private fun loadPrefs() {
-        savedCode = Prefs.code(this)
+        savedCode = Prefs.code(ctx)
         codeLen = if (savedCode.isEmpty()) 4 else savedCode.length
+        val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        secureDevice = km.isDeviceSecure
     }
 
-    private fun hideBars() {
-        val c = WindowInsetsControllerCompat(window, window.decorView)
-        c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        c.hide(WindowInsetsCompat.Type.systemBars())
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideBars()
+    private fun resetState() {
+        codeMode = false
+        unlocking = false
+        faceOk = false
+        consec = 0
+        typed.setLength(0)
+        updateDots()
+        actionText.text = "Annuler"
+        codeTitle.text = "Entrez le code"
+        hint.text = "Balayer vers le haut pour ouvrir"
+        torchBtn.setActive(torchOn)
     }
 
     // ------------------------------------------------------------------ UI
@@ -137,8 +182,15 @@ class LockActivity : ComponentActivity() {
         loops.add(a)
     }
 
-    private fun buildUi() {
-        root = FrameLayout(this)
+    private fun build() {
+        loops.forEach { it.cancel() }
+        loops.clear()
+        scanAnim?.cancel()
+        scanAnim = null
+        root.removeAllViews()
+        dots.clear()
+        hasWallpaper = false
+
         root.background = GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             intArrayOf(
@@ -148,7 +200,7 @@ class LockActivity : ComponentActivity() {
         )
 
         // Fond d'écran choisi dans l'appli
-        val wp = File(filesDir, "wallpaper.jpg")
+        val wp = File(ctx.filesDir, "wallpaper.jpg")
         if (wp.exists()) {
             val bmp = try {
                 BitmapFactory.decodeFile(wp.path)
@@ -157,11 +209,11 @@ class LockActivity : ComponentActivity() {
             }
             if (bmp != null) {
                 hasWallpaper = true
-                val iv = ImageView(this)
+                val iv = ImageView(ctx)
                 iv.scaleType = ImageView.ScaleType.CENTER_CROP
                 iv.setImageBitmap(bmp)
                 root.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
-                val shade = View(this)
+                val shade = View(ctx)
                 shade.background = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
                     intArrayOf(0x66000000, 0x00000000, 0x77000000)
@@ -172,7 +224,7 @@ class LockActivity : ComponentActivity() {
 
         // Taches lumineuses qui flottent (seulement sans fond d'écran perso)
         if (!hasWallpaper) {
-            val g1 = GlowView(this, 0x99FFB36B.toInt())
+            val g1 = GlowView(ctx, 0x99FFB36B.toInt())
             root.addView(
                 g1,
                 FrameLayout.LayoutParams(dp(420), dp(420), Gravity.TOP or Gravity.END).apply {
@@ -180,7 +232,7 @@ class LockActivity : ComponentActivity() {
                     rightMargin = -dp(160)
                 }
             )
-            val g2 = GlowView(this, 0x8860A5FA.toInt())
+            val g2 = GlowView(ctx, 0x8860A5FA.toInt())
             root.addView(
                 g2,
                 FrameLayout.LayoutParams(dp(460), dp(460), Gravity.BOTTOM or Gravity.START).apply {
@@ -195,16 +247,16 @@ class LockActivity : ComponentActivity() {
         }
 
         // ---- Écran principal (heure, date, boutons)
-        lockLayer = FrameLayout(this)
+        lockLayer = FrameLayout(ctx)
 
-        header = LinearLayout(this).apply {
+        header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        lockIcon = LockIconView(this)
+        lockIcon = LockIconView(ctx)
         header.addView(lockIcon, LinearLayout.LayoutParams(dp(22), dp(28)))
 
-        val date = TextClock(this).apply {
+        val date = TextClock(ctx).apply {
             format12Hour = "EEEE d MMMM"
             format24Hour = "EEEE d MMMM"
             setTextColor(0xE6FFFFFF.toInt())
@@ -214,11 +266,11 @@ class LockActivity : ComponentActivity() {
         }
         header.addView(date, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(14) })
 
-        val time = TextClock(this).apply {
+        val time = TextClock(ctx).apply {
             format12Hour = "h:mm"
             format24Hour = "H:mm"
             setTextColor(0xF2FFFFFF.toInt())
-            textSize = Prefs.clockSize(this@LockActivity).toFloat()
+            textSize = Prefs.clockSize(ctx).toFloat()
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             includeFontPadding = false
             letterSpacing = -0.02f
@@ -228,11 +280,11 @@ class LockActivity : ComponentActivity() {
 
         lockLayer.addView(
             header,
-            FrameLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(Prefs.clockTop(this@LockActivity)) }
+            FrameLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(Prefs.clockTop(ctx)) }
         )
 
-        torchBtn = ControlButton(this, ControlButton.TORCH) { toggleTorch() }
-        camBtn = ControlButton(this, ControlButton.CAMERA) { openCamera() }
+        torchBtn = ControlButton(ctx, ControlButton.TORCH) { toggleTorch() }
+        camBtn = ControlButton(ctx, ControlButton.CAMERA) { openCamera() }
         lockLayer.addView(
             torchBtn,
             FrameLayout.LayoutParams(dp(58), dp(58)).apply {
@@ -250,7 +302,42 @@ class LockActivity : ComponentActivity() {
             }
         )
 
-        hint = TextView(this).apply {
+        // Empreinte : visible seulement si le Samsung a un verrouillage (sinon Android efface les empreintes)
+        val fp = ArrayList<View>()
+        if (secureDevice) {
+            val icon = FingerprintView(ctx)
+            lockLayer.addView(
+                icon,
+                FrameLayout.LayoutParams(dp(46), dp(46)).apply {
+                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(122)
+                }
+            )
+            val label = TextView(ctx).apply {
+                text = "Touche le capteur"
+                textSize = 12f
+                setTextColor(0xB3FFFFFF.toInt())
+                gravity = Gravity.CENTER
+            }
+            lockLayer.addView(
+                label,
+                FrameLayout.LayoutParams(WRAP, WRAP).apply {
+                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                    bottomMargin = dp(98)
+                }
+            )
+            val pulse = ObjectAnimator.ofFloat(icon, View.ALPHA, 0.55f, 1f)
+            pulse.duration = 1100
+            pulse.repeatCount = ValueAnimator.INFINITE
+            pulse.repeatMode = ValueAnimator.REVERSE
+            pulse.start()
+            loops.add(pulse)
+            fp.add(icon)
+            fp.add(label)
+        }
+        fpViews = fp
+
+        hint = TextView(ctx).apply {
             text = "Balayer vers le haut pour ouvrir"
             textSize = 13f
             setTextColor(0xCCFFFFFF.toInt())
@@ -263,14 +350,14 @@ class LockActivity : ComponentActivity() {
                 bottomMargin = dp(32)
             }
         )
-        val pulse = ObjectAnimator.ofFloat(hint, View.ALPHA, 0.35f, 1f)
-        pulse.duration = 1400
-        pulse.repeatCount = ValueAnimator.INFINITE
-        pulse.repeatMode = ValueAnimator.REVERSE
-        pulse.start()
-        loops.add(pulse)
+        val hintPulse = ObjectAnimator.ofFloat(hint, View.ALPHA, 0.35f, 1f)
+        hintPulse.duration = 1400
+        hintPulse.repeatCount = ValueAnimator.INFINITE
+        hintPulse.repeatMode = ValueAnimator.REVERSE
+        hintPulse.start()
+        loops.add(hintPulse)
 
-        homeBar = View(this).apply {
+        homeBar = View(ctx).apply {
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
                 cornerRadius = dpf(3f)
@@ -318,25 +405,53 @@ class LockActivity : ComponentActivity() {
         }
         root.addView(lockLayer, FrameLayout.LayoutParams(MATCH, MATCH))
 
+        // Bouton de sortie, uniquement pour l'aperçu
+        if (preview) {
+            val close = TextView(ctx).apply {
+                text = "Fermer l'aperçu"
+                textSize = 15f
+                setTextColor(Color.WHITE)
+                setPadding(dp(16), dp(10), dp(16), dp(10))
+                background = GradientDrawable().apply {
+                    setColor(0x55000000)
+                    cornerRadius = dpf(20f)
+                }
+                setOnClickListener { unlock() }
+            }
+            root.addView(
+                close,
+                FrameLayout.LayoutParams(WRAP, WRAP).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    topMargin = dp(44)
+                    leftMargin = dp(16)
+                }
+            )
+        }
+
         // ---- Écran du code
         codeLayer = buildCodeLayer()
         codeLayer.visibility = View.GONE
         codeLayer.alpha = 0f
         root.addView(codeLayer, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        // ---- Appareil photo intégré (impossible de s'échapper vers une autre appli)
+        camLayer = buildCameraLayer()
+        camLayer.visibility = View.GONE
+        root.addView(camLayer, FrameLayout.LayoutParams(MATCH, MATCH))
     }
 
     private fun buildCodeLayer(): FrameLayout {
-        val layer = FrameLayout(this)
+        val layer = FrameLayout(ctx)
         layer.isClickable = true
 
-        val col = LinearLayout(this).apply {
+        val col = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
         }
-        codeLock = LockIconView(this)
+        codeLock = LockIconView(ctx)
         col.addView(codeLock, LinearLayout.LayoutParams(dp(22), dp(28)))
 
-        codeTitle = TextView(this).apply {
+        codeTitle = TextView(ctx).apply {
             text = "Entrez le code"
             textSize = 20f
             setTextColor(Color.WHITE)
@@ -345,12 +460,12 @@ class LockActivity : ComponentActivity() {
         }
         col.addView(codeTitle, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(16) })
 
-        dotsRow = LinearLayout(this).apply {
+        dotsRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
         for (i in 0 until codeLen) {
-            val d = DotView(this)
+            val d = DotView(ctx)
             dots.add(d)
             dotsRow.addView(
                 d,
@@ -368,31 +483,32 @@ class LockActivity : ComponentActivity() {
             listOf("7" to "PQRS", "8" to "TUV", "9" to "WXYZ")
         )
         for (r in rows) {
-            val row = LinearLayout(this).apply {
+            val row = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
             }
             for ((n, l) in r) addDigit(row, n, l)
             col.addView(row, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(14) })
         }
-        val last = LinearLayout(this).apply {
+        val last = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        last.addView(View(this), keyParams())
+        last.addView(View(ctx), keyParams())
         addDigit(last, "0", "")
-        last.addView(View(this), keyParams())
+        last.addView(View(ctx), keyParams())
         col.addView(last, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(14) })
 
+        // Centré en hauteur, comme sur l'iPhone
         layer.addView(
             col,
             FrameLayout.LayoutParams(WRAP, WRAP).apply {
-                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                topMargin = dp(80)
+                gravity = Gravity.CENTER
+                bottomMargin = dp(24)
             }
         )
 
-        actionText = TextView(this).apply {
+        actionText = TextView(ctx).apply {
             text = "Annuler"
             textSize = 17f
             setTextColor(Color.WHITE)
@@ -410,71 +526,126 @@ class LockActivity : ComponentActivity() {
         return layer
     }
 
+    private fun buildCameraLayer(): FrameLayout {
+        val layer = FrameLayout(ctx)
+        layer.setBackgroundColor(Color.BLACK)
+        layer.isClickable = true
+
+        camPreview = PreviewView(ctx)
+        camPreview.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        camPreview.scaleType = PreviewView.ScaleType.FILL_CENTER
+        layer.addView(camPreview, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        camMsg = TextView(ctx).apply {
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(32), 0, dp(32), 0)
+            visibility = View.GONE
+        }
+        layer.addView(camMsg, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER))
+
+        camFlash = View(ctx).apply {
+            setBackgroundColor(Color.WHITE)
+            alpha = 0f
+        }
+        layer.addView(camFlash, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        layer.addView(
+            ShutterView(ctx) { takePhoto() },
+            FrameLayout.LayoutParams(dp(76), dp(76)).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                bottomMargin = dp(48)
+            }
+        )
+
+        val close = TextView(ctx).apply {
+            text = "Fermer"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setOnClickListener { closeCamera() }
+        }
+        layer.addView(
+            close,
+            FrameLayout.LayoutParams(WRAP, WRAP).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+                leftMargin = dp(20)
+                bottomMargin = dp(60)
+            }
+        )
+
+        val flip = TextView(ctx).apply {
+            text = "Retourner"
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setOnClickListener {
+                backCam = !backCam
+                bindCamera()
+            }
+        }
+        layer.addView(
+            flip,
+            FrameLayout.LayoutParams(WRAP, WRAP).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+                rightMargin = dp(20)
+                bottomMargin = dp(60)
+            }
+        )
+        return layer
+    }
+
     private fun keyParams() = LinearLayout.LayoutParams(dp(78), dp(78)).apply {
         leftMargin = dp(11)
         rightMargin = dp(11)
     }
 
     private fun addDigit(row: LinearLayout, n: String, l: String) {
-        row.addView(DigitButton(this, n, l) { onDigit(it) }, keyParams())
+        row.addView(DigitButton(ctx, n, l) { onDigit(it) }, keyParams())
     }
 
     // ------------------------------------------------------------------ Animations
 
-    private fun playIntro() {
-        codeMode = false
-        unlocking = false
-        faceOk = false
-        handler.removeCallbacksAndMessages(null)
-        stopFace()
-        typed.setLength(0)
-        updateDots()
-        actionText.text = "Annuler"
-        codeTitle.text = "Entrez le code"
-        hint.text = "Balayer vers le haut pour ouvrir"
-
-        codeLayer.animate().cancel()
-        codeLayer.visibility = View.GONE
-        codeLayer.alpha = 0f
-        codeLayer.translationY = 0f
-
-        root.animate().cancel()
-        root.alpha = 1f
-        root.scaleX = 1f
-        root.scaleY = 1f
-
-        lockLayer.animate().cancel()
-        lockLayer.translationY = 0f
-        lockLayer.alpha = 1f
-        lockLayer.scaleX = 1f
-        lockLayer.scaleY = 1f
-
-        // Le cadenas se referme
+    /** État de départ de l'animation de réveil, posé pendant que l'écran est éteint. */
+    private fun prepareIntro() {
         lockIcon.lift = 1f
-        lockIcon.animateTo(0f, 420)
         codeLock.lift = 0f
-
         header.alpha = 0f
         header.translationY = -dpf(18f)
+        for (v in listOf<View>(torchBtn, camBtn)) {
+            v.alpha = 0f
+            v.scaleX = 0.5f
+            v.scaleY = 0.5f
+        }
+        homeBar.alpha = 0f
+        homeBar.translationY = dpf(30f)
+        for (v in fpViews) v.alpha = 0f
+    }
+
+    /** Animation de réveil : le cadenas se referme, l'heure descend, les boutons rebondissent. */
+    fun playIntro() {
+        if (!::lockIcon.isInitialized || unlocking) return
+        lockIcon.animateTo(0f, 420)
+
         header.animate().setStartDelay(0).alpha(1f).translationY(0f).setDuration(520)
             .setInterpolator(DecelerateInterpolator(2f)).start()
 
         val btns = listOf<View>(torchBtn, camBtn)
         for ((i, v) in btns.withIndex()) {
-            v.alpha = 0f
-            v.scaleX = 0.5f
-            v.scaleY = 0.5f
             v.animate().setStartDelay(180L + 90L * i).alpha(1f).scaleX(1f).scaleY(1f)
                 .setDuration(420).setInterpolator(OvershootInterpolator(1.6f)).start()
         }
 
-        homeBar.translationY = dpf(30f)
-        homeBar.alpha = 0f
         homeBar.animate().setStartDelay(250).translationY(0f).alpha(0.9f).setDuration(450)
             .setInterpolator(DecelerateInterpolator()).start()
 
+        for (v in fpViews) {
+            v.animate().setStartDelay(300).alpha(1f).setDuration(400).start()
+        }
+
         // Après l'animation de réveil, on cherche ton visage
-        handler.postDelayed({ startFace() }, 500)
+        handler.postDelayed({ startFace() }, 350)
     }
 
     private fun applyDrag(dy: Float) {
@@ -534,16 +705,16 @@ class LockActivity : ComponentActivity() {
 
     private fun faceReady(): Boolean {
         return savedCode.isNotEmpty() &&
-            Prefs.faceEnabled(this) &&
-            Prefs.face(this) != null &&
-            checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            Prefs.faceEnabled(ctx) &&
+            Prefs.face(ctx) != null &&
+            ctx.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun startFace() {
-        if (unlocking || codeMode || faceOk) return
+        if (unlocking || codeMode || faceOk || cameraOpen) return
         if (!faceReady()) return
-        val ref = Prefs.face(this) ?: return
-        val tol = Prefs.faceTol(this)
+        val ref = Prefs.face(ctx) ?: return
+        val tol = Prefs.faceTol(ctx)
         consec = 0
         scanAnim?.cancel()
         scanAnim = ObjectAnimator.ofFloat(lockIcon, View.ALPHA, 0.35f, 1f).apply {
@@ -553,9 +724,9 @@ class LockActivity : ComponentActivity() {
             start()
         }
         face.start(null) { v ->
-            if (!faceOk && !unlocking && !codeMode) {
+            if (!faceOk && !unlocking && !codeMode && !cameraOpen) {
                 if (FaceMatch.distance(v, ref) < tol) consec++ else consec = 0
-                if (consec >= 3) onFaceSuccess()
+                if (consec >= 3) handler.post { onFaceSuccess() }
             }
         }
         handler.postDelayed({ onFaceTimeout() }, 5000)
@@ -569,10 +740,10 @@ class LockActivity : ComponentActivity() {
     }
 
     private fun onFaceSuccess() {
-        if (faceOk) return
+        if (faceOk || unlocking) return
         stopFace()
         faceOk = true
-        lockIcon.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        buzz(30)
         lockIcon.animateTo(1f, 300)
         hint.text = "Visage reconnu · balayer vers le haut"
     }
@@ -641,7 +812,7 @@ class LockActivity : ComponentActivity() {
 
     private fun buzz(ms: Long) {
         try {
-            val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            val v = ctx.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
         } catch (e: Exception) {
         }
@@ -658,42 +829,15 @@ class LockActivity : ComponentActivity() {
         handler.postDelayed({
             root.animate().setStartDelay(0).scaleX(1.15f).scaleY(1.15f).alpha(0f)
                 .setDuration(320).setInterpolator(AccelerateInterpolator())
-                .withEndAction { finishUnlock() }.start()
+                .withEndAction { host.onUnlocked() }.start()
         }, 220)
     }
 
-    private fun finishUnlock() {
-        val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-        if (preview || !km.isKeyguardLocked) {
-            closeNow()
-            return
-        }
-        // Si le Samsung a encore un code / une empreinte, le système les demande ici.
-        km.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
-            override fun onDismissSucceeded() {
-                closeNow()
-            }
-
-            override fun onDismissCancelled() {
-                playIntro()
-            }
-
-            override fun onDismissError() {
-                closeNow()
-            }
-        })
-    }
-
-    private fun closeNow() {
-        finish()
-        overridePendingTransition(0, 0)
-    }
-
-    // ------------------------------------------------------------------ Lampe & appareil photo
+    // ------------------------------------------------------------------ Lampe
 
     private fun toggleTorch() {
         try {
-            val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cm = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val id = cm.cameraIdList.firstOrNull {
                 cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             } ?: return
@@ -704,86 +848,103 @@ class LockActivity : ComponentActivity() {
         }
     }
 
+    // ------------------------------------------------------------------ Appareil photo intégré
+
     private fun openCamera() {
-        leaving = true
+        if (cameraOpen || unlocking) return
+        cameraOpen = true
         stopFace()
-        val flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        try {
-            startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA_SECURE).addFlags(flags))
-        } catch (e: Exception) {
-            try {
-                startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).addFlags(flags))
-            } catch (e2: Exception) {
-                leaving = false
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ Cycle de vie
-
-    /** Le service nous relance à chaque allumage / extinction : on rejoue l'animation de réveil. */
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        if (unlocking) return
-        preview = intent.getBooleanExtra("preview", false)
-        val old = codeLen
-        loadPrefs()
-        if (old != codeLen) {
-            recreate()
+        handler.removeCallbacksAndMessages(null)
+        camMsg.visibility = View.GONE
+        camLayer.alpha = 0f
+        camLayer.visibility = View.VISIBLE
+        camLayer.animate().setStartDelay(0).alpha(1f).setDuration(220).start()
+        if (ctx.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            camMsg.text = "Autorise la caméra dans l'appli « Écran iOS » pour prendre des photos ici."
+            camMsg.visibility = View.VISIBLE
             return
         }
-        playIntro()
+        bindCamera()
     }
 
-    override fun onResume() {
-        super.onResume()
-        leaving = false
+    private fun bindCamera() {
+        val fut = ProcessCameraProvider.getInstance(ctx)
+        fut.addListener(Runnable {
+            if (!cameraOpen) return@Runnable
+            try {
+                val p = fut.get()
+                camProvider = p
+                p.unbindAll()
+                val pv = Preview.Builder().build()
+                pv.setSurfaceProvider(camPreview.surfaceProvider)
+                val ic = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .build()
+                imageCapture = ic
+                val sel = if (backCam) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                p.bindToLifecycle(owner, sel, pv, ic)
+                camMsg.visibility = View.GONE
+            } catch (e: Exception) {
+                camMsg.text = "Impossible d'ouvrir l'appareil photo."
+                camMsg.visibility = View.VISIBLE
+            }
+        }, ContextCompat.getMainExecutor(ctx))
     }
 
-    /**
-     * Verrouillage strict : si on essaie de quitter l'écran (Accueil, applis récentes)
-     * sans avoir mis le code ou montré son visage, l'écran revient aussitôt.
-     */
-    override fun onStop() {
-        super.onStop()
-        stopFace()
-        if (isFinishing || unlocking || preview || leaving) return
-        if (savedCode.isEmpty() || !Prefs.strict(this)) return
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (!pm.isInteractive) return
-        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        if (am.mode != AudioManager.MODE_NORMAL) return
-        handler.postDelayed({ relaunch() }, 150)
-    }
-
-    private fun relaunch() {
-        try {
-            startActivity(
-                Intent(this, LockActivity::class.java).addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-                )
+    private fun takePhoto() {
+        val ic = imageCapture ?: return
+        val cv = ContentValues().apply {
+            put(
+                MediaStore.Images.Media.DISPLAY_NAME,
+                "IMG_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             )
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= 29) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/IosLock")
+            }
+        }
+        val opts = ImageCapture.OutputFileOptions.Builder(
+            ctx.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv
+        ).build()
+        ic.takePicture(
+            opts,
+            ContextCompat.getMainExecutor(ctx),
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    camFlash.alpha = 0.9f
+                    camFlash.animate().setStartDelay(0).alpha(0f).setDuration(240).start()
+                    buzz(20)
+                }
+
+                override fun onError(exception: ImageCaptureException) {
+                    camMsg.text = "La photo n'a pas pu être enregistrée."
+                    camMsg.visibility = View.VISIBLE
+                }
+            }
+        )
+    }
+
+    private fun closeCamera() {
+        if (!cameraOpen) return
+        cameraOpen = false
+        try {
+            camProvider?.unbindAll()
         } catch (e: Exception) {
         }
+        imageCapture = null
+        camLayer.animate().setStartDelay(0).alpha(0f).setDuration(200)
+            .withEndAction { if (!cameraOpen) camLayer.visibility = View.GONE }.start()
+        handler.postDelayed({ startFace() }, 300)
     }
 
-    @Suppress("DEPRECATION")
-    override fun onBackPressed() {
-        if (codeMode) {
-            closeCode()
-        } else if (preview) {
-            closeNow()
+    private fun closeCameraNow() {
+        cameraOpen = false
+        try {
+            camProvider?.unbindAll()
+        } catch (e: Exception) {
         }
-    }
-
-    override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
-        loops.forEach { it.cancel() }
-        scanAnim?.cancel()
-        face.release()
-        super.onDestroy()
+        imageCapture = null
+        camLayer.animate().cancel()
+        camLayer.visibility = View.GONE
     }
 }

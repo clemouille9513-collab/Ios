@@ -11,10 +11,6 @@ object Prefs {
     fun code(c: Context): String = sp(c).getString("code", "") ?: ""
     fun setCode(c: Context, v: String) = sp(c).edit().putString("code", v).apply()
 
-    /** Verrouillage strict : on ne peut pas quitter l'écran sans code ou visage. */
-    fun strict(c: Context): Boolean = sp(c).getBoolean("strict", true)
-    fun setStrict(c: Context, v: Boolean) = sp(c).edit().putBoolean("strict", v).apply()
-
     fun faceEnabled(c: Context): Boolean = sp(c).getBoolean("faceEnabled", false)
     fun setFaceEnabled(c: Context, v: Boolean) = sp(c).edit().putBoolean("faceEnabled", v).apply()
 
