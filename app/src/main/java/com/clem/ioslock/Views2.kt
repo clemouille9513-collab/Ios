@@ -74,3 +74,40 @@ class ShutterView(ctx: Context, private val onShoot: () -> Unit) : View(ctx) {
         return true
     }
 }
+
+/** Batterie façon iOS (barre d'état) : remplissage, éclair quand ça charge. */
+class BatteryView(ctx: Context) : View(ctx) {
+    var level = 100
+    var charging = false
+    private val d = resources.displayMetrics.density
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val r = RectF()
+
+    fun set(level: Int, charging: Boolean) {
+        this.level = level.coerceIn(0, 100)
+        this.charging = charging
+        invalidate()
+    }
+
+    override fun onDraw(c: Canvas) {
+        val bw = width - 3f * d
+        val h = height.toFloat()
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 1.2f * d
+        p.color = 0x99FFFFFF.toInt()
+        r.set(0.6f * d, 0.6f * d, bw - 0.6f * d, h - 0.6f * d)
+        c.drawRoundRect(r, 4f * d, 4f * d, p)
+        p.style = Paint.Style.FILL
+        p.color = 0x99FFFFFF.toInt()
+        r.set(bw + 0.8f * d, h * 0.36f, bw + 2.4f * d, h * 0.64f)
+        c.drawRoundRect(r, d, d, p)
+        p.color = when {
+            charging -> 0xFF34D058.toInt()
+            level <= 20 -> 0xFFFF453A.toInt()
+            else -> Color.WHITE
+        }
+        val inner = 2.2f * d
+        r.set(inner, inner, inner + (bw - 2 * inner) * level / 100f, h - inner)
+        c.drawRoundRect(r, 2f * d, 2f * d, p)
+    }
+}

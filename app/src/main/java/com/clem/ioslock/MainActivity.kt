@@ -8,6 +8,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Bundle
@@ -93,27 +95,46 @@ class MainActivity : Activity() {
         text("Le look de l'écran de verrouillage de l'iPhone, sur ton Samsung.", 14f, grey, false, 6)
 
         // ------------------------------------------------------------ 1. Service
-        text("1. Service d'accessibilité (obligatoire)", 16f, Color.WHITE, true, 28)
-        text(
-            "C'est lui qui pose l'écran par-dessus tout, avant même que l'écran se rallume, et qui bloque tout le reste. Il ne lit rien de ce qui s'affiche.",
-            13f, grey, false, 4
-        )
+        text("1. Choisis le mode", 16f, Color.WHITE, true, 28)
         statusTv = TextView(this)
         statusTv.textSize = 15f
         statusTv.setTypeface(null, Typeface.BOLD)
         col.addView(statusTv, lp(8))
+
+        text("Mode complet (recommandé) : service d'accessibilité", 14f, Color.WHITE, true, 14)
+        text(
+            "Bloque vraiment tout : l'écran couvre la barre du haut et du bas. Mais Android 13+ bloque ce réglage pour les applis installées à la main (« paramètre restreint »). Pour le débloquer, dans cet ordre :\n\n" +
+                "1) Touche le bouton « Ouvrir les réglages d'accessibilité », ouvre « Applis installées » (ou « Services installés »), touche « Écran iOS » et essaie de l'activer. Android affiche « Paramètre restreint » : touche OK. Cette étape est obligatoire, sans elle l'option de l'étape 2 n'apparaît pas.\n" +
+                "2) Touche « Ouvrir les infos de l'appli », puis les trois points ⋮ en haut à droite, puis « Autoriser les paramètres restreints » (confirme avec ton empreinte ou ton code Samsung).\n" +
+                "3) Reviens dans les réglages d'accessibilité et active « Écran iOS ».",
+            12f, grey, false, 4
+        )
         button("Ouvrir les réglages d'accessibilité") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
-        text(
-            "Cherche « Écran iOS » dans les applis installées et active-le. Si Android refuse (« paramètre restreint ») : ouvre d'abord les infos de l'appli, touche les trois points en haut à droite, puis « Autoriser les paramètres restreints ».",
-            12f, grey, false, 6
-        )
         button("Ouvrir les infos de l'appli") {
             startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
             )
         }
+
+        text("Mode simple : sans accessibilité", 14f, Color.WHITE, true, 18)
+        text(
+            "Si le mode complet ne passe pas, celui-ci n'a pas besoin des paramètres restreints : il faut seulement autoriser « Affichage par-dessus les autres applis ». L'écran iOS s'affiche quand tu allumes le téléphone, mais la barre d'état du haut peut encore être tirée, et il marche mieux quand le verrouillage Samsung est sur « Aucun ».",
+            12f, grey, false, 4
+        )
+        button("Autoriser l'affichage par-dessus les autres applis") {
+            startActivity(
+                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            )
+        }
+        button("Autoriser les notifications (mode simple)") {
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 3)
+            }
+        }
+
+        text("Dans les deux modes", 14f, Color.WHITE, true, 18)
         button("Autoriser la caméra (visage et photos)") {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 2)
         }
@@ -205,6 +226,69 @@ class MainActivity : Activity() {
             File(filesDir, "wallpaper.jpg").delete()
             toast("Fond par défaut remis")
         }
+        text("Fonds de couleur animés", 14f, Color.WHITE, true, 14)
+        val wallRows = LinearLayout(this)
+        wallRows.orientation = LinearLayout.VERTICAL
+        col.addView(wallRows, lp(6))
+        var wallRow: LinearLayout? = null
+        Wallpapers.presets.forEachIndexed { i, wpst ->
+            if (i % 2 == 0) {
+                wallRow = LinearLayout(this)
+                wallRow!!.orientation = LinearLayout.HORIZONTAL
+                wallRows.addView(wallRow, lp(6))
+            }
+            val tv = TextView(this)
+            tv.text = wpst.name
+            tv.setTextColor(Color.WHITE)
+            tv.textSize = 14f
+            tv.gravity = Gravity.CENTER
+            tv.setPadding(dp(8), dp(22), dp(8), dp(22))
+            tv.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, wpst.colors).apply {
+                cornerRadius = dp(14).toFloat()
+            }
+            tv.setOnClickListener {
+                Prefs.setWallPreset(this, i)
+                File(filesDir, "wallpaper.jpg").delete()
+                toast("Fond « ${wpst.name} » choisi")
+            }
+            wallRow!!.addView(
+                tv,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    leftMargin = dp(4)
+                    rightMargin = dp(4)
+                }
+            )
+        }
+        val parSw = Switch(this)
+        parSw.text = "Effet de profondeur (le fond bouge quand tu inclines)"
+        parSw.setTextColor(Color.WHITE)
+        parSw.isChecked = Prefs.parallax(this)
+        parSw.setOnCheckedChangeListener { _, on -> Prefs.setParallax(this, on) }
+        col.addView(parSw, lp(14))
+        val blurSw = Switch(this)
+        blurSw.text = "Fond flou derrière le code"
+        blurSw.setTextColor(Color.WHITE)
+        blurSw.isChecked = Prefs.blur(this)
+        blurSw.setOnCheckedChangeListener { _, on -> Prefs.setBlur(this, on) }
+        col.addView(blurSw, lp(8))
+        val colorBtn = Button(this)
+        colorBtn.isAllCaps = false
+        colorBtn.text = "Couleur de l'heure : " + Wallpapers.clockColors[Prefs.clockColor(this)].first
+        colorBtn.setOnClickListener {
+            val n = (Prefs.clockColor(this) + 1) % Wallpapers.clockColors.size
+            Prefs.setClockColor(this, n)
+            colorBtn.text = "Couleur de l'heure : " + Wallpapers.clockColors[n].first
+        }
+        col.addView(colorBtn, lp(12))
+        val weightBtn = Button(this)
+        weightBtn.isAllCaps = false
+        weightBtn.text = "Épaisseur de l'heure : " + Wallpapers.clockWeights[Prefs.clockWeight(this)].first
+        weightBtn.setOnClickListener {
+            val n = (Prefs.clockWeight(this) + 1) % Wallpapers.clockWeights.size
+            Prefs.setClockWeight(this, n)
+            weightBtn.text = "Épaisseur de l'heure : " + Wallpapers.clockWeights[n].first
+        }
+        col.addView(weightBtn, lp(8))
         slider("Hauteur de l'heure", " dp", 20, 260, Prefs.clockTop(this)) { Prefs.setClockTop(this, it) }
         slider("Taille de l'heure", " sp", 50, 120, Prefs.clockSize(this)) { Prefs.setClockSize(this, it) }
 
@@ -216,24 +300,35 @@ class MainActivity : Activity() {
         sw.isChecked = Prefs.enabled(this)
         sw.setOnCheckedChangeListener { b, on ->
             if (on) {
-                if (LockAccessibilityService.instance == null) {
-                    toast("Active d'abord le service d'accessibilité (étape 1)")
-                    b.isChecked = false
-                } else {
+                if (LockAccessibilityService.instance != null) {
+                    Prefs.setSimpleMode(this, false)
                     Prefs.setEnabled(this, true)
+                } else if (LockOverlayService.canRun(this)) {
+                    Prefs.setSimpleMode(this, true)
+                    Prefs.setEnabled(this, true)
+                    LockOverlayService.start(this)
+                } else {
+                    toast("Choisis d'abord un mode (étape 1)")
+                    b.isChecked = false
                 }
             } else {
                 Prefs.setEnabled(this, false)
+                if (Prefs.simpleMode(this)) stopService(Intent(this, LockOverlayService::class.java))
             }
         }
         col.addView(sw, lp(10))
 
         button("Voir l'aperçu de l'écran") {
-            val s = LockAccessibilityService.instance
-            if (s == null) {
-                toast("Active d'abord le service d'accessibilité (étape 1)")
+            val c = LockController.current
+            if (c == null) {
+                if (LockAccessibilityService.instance == null && LockOverlayService.canRun(this)) {
+                    LockOverlayService.start(this)
+                    toast("Mode simple lancé : touche encore une fois « Voir l'aperçu »")
+                } else {
+                    toast("Choisis d'abord un mode (étape 1)")
+                }
             } else {
-                s.showPreview()
+                c.showPreview()
             }
         }
 
@@ -247,11 +342,22 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (Prefs.enabled(this) && Prefs.simpleMode(this) &&
+            LockAccessibilityService.instance == null && LockController.current == null
+        ) {
+            LockOverlayService.start(this)
+        }
         if (LockAccessibilityService.instance != null) {
-            statusTv.text = "✓ Service actif"
+            statusTv.text = "✓ Mode complet actif (accessibilité)"
             statusTv.setTextColor(0xFF4ADE80.toInt())
+        } else if (LockController.current != null) {
+            statusTv.text = "✓ Mode simple actif"
+            statusTv.setTextColor(0xFF4ADE80.toInt())
+        } else if (LockOverlayService.canRun(this)) {
+            statusTv.text = "Mode simple possible : active l'interrupteur de l'étape 6"
+            statusTv.setTextColor(0xFFFBBF24.toInt())
         } else {
-            statusTv.text = "✗ Service inactif"
+            statusTv.text = "✗ Aucun mode actif"
             statusTv.setTextColor(0xFFF87171.toInt())
         }
     }

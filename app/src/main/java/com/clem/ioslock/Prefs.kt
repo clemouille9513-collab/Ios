@@ -41,4 +41,23 @@ object Prefs {
     /** Taille de l'heure, en sp. */
     fun clockSize(c: Context): Int = sp(c).getInt("clockSize", 84)
     fun setClockSize(c: Context, v: Int) = sp(c).edit().putInt("clockSize", v).apply()
+
+    fun wallPreset(c: Context): Int = sp(c).getInt("wallPreset", 0)
+    fun setWallPreset(c: Context, v: Int) = sp(c).edit().putInt("wallPreset", v).apply()
+
+    fun clockColor(c: Context): Int = sp(c).getInt("clockColor", 0)
+    fun setClockColor(c: Context, v: Int) = sp(c).edit().putInt("clockColor", v).apply()
+
+    fun clockWeight(c: Context): Int = sp(c).getInt("clockWeight", 2)
+    fun setClockWeight(c: Context, v: Int) = sp(c).edit().putInt("clockWeight", v).apply()
+
+    fun parallax(c: Context): Boolean = sp(c).getBoolean("parallax", true)
+    fun setParallax(c: Context, v: Boolean) = sp(c).edit().putBoolean("parallax", v).apply()
+
+    fun blur(c: Context): Boolean = sp(c).getBoolean("blur", true)
+    fun setBlur(c: Context, v: Boolean) = sp(c).edit().putBoolean("blur", v).apply()
+
+    /** Mode simple : sans service d'accessibilité (superposition + service au premier plan). */
+    fun simpleMode(c: Context): Boolean = sp(c).getBoolean("simpleMode", false)
+    fun setSimpleMode(c: Context, v: Boolean) = sp(c).edit().putBoolean("simpleMode", v).apply()
 }

@@ -9,6 +9,13 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import android.os.BatteryManager
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.hardware.camera2.CameraCharacteristics
@@ -83,6 +90,28 @@ class LockUi(
     private val typed = StringBuilder()
     private val dots = ArrayList<DotView>()
 
+    private lateinit var wallLayer: FrameLayout
+    private lateinit var dimView: View
+    private lateinit var battery: BatteryView
+    private var blurAnim: ValueAnimator? = null
+    private var sensorMgr: SensorManager? = null
+    private var parX = 0f
+    private var parY = 0f
+    private var downX = 0f
+    private var axis = 0
+    private val sensorListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            if (!::wallLayer.isInitialized) return
+            val tx = (-e.values[0] * dpf(1.5f)).coerceIn(-dpf(13f), dpf(13f))
+            val ty = ((e.values[1] - 6f) * dpf(1.2f)).coerceIn(-dpf(13f), dpf(13f))
+            parX += (tx - parX) * 0.1f
+            parY += (ty - parY) * 0.1f
+            wallLayer.translationX = parX
+            wallLayer.translationY = parY
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    }
     private lateinit var lockLayer: FrameLayout
     private lateinit var codeLayer: FrameLayout
     private lateinit var camLayer: FrameLayout
@@ -117,6 +146,8 @@ class LockUi(
         this.preview = preview
         handler.removeCallbacksAndMessages(null)
         stopFace()
+        stopParallax()
+        blurAnim?.cancel()
         if (::camLayer.isInitialized) closeCameraNow()
         loadPrefs()
         build()
@@ -130,12 +161,15 @@ class LockUi(
 
     fun abortForCall() {
         handler.removeCallbacksAndMessages(null)
+        stopParallax()
         stopFace()
         if (::camLayer.isInitialized) closeCameraNow()
     }
 
     fun destroy() {
         handler.removeCallbacksAndMessages(null)
+        stopParallax()
+        blurAnim?.cancel()
         loops.forEach { it.cancel() }
         scanAnim?.cancel()
         face.release()
@@ -191,15 +225,16 @@ class LockUi(
         dots.clear()
         hasWallpaper = false
 
-        root.background = GradientDrawable(
-            GradientDrawable.Orientation.TL_BR,
-            intArrayOf(
-                0xFF16215F.toInt(), 0xFF5B34C9.toInt(),
-                0xFFD9468A.toInt(), 0xFFFF8F5A.toInt()
-            )
-        )
+        val preset = Wallpapers.presets[Prefs.wallPreset(ctx).coerceIn(0, Wallpapers.presets.size - 1)]
+        root.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, preset.colors)
 
-        // Fond d'écran choisi dans l'appli
+        // Le fond vit dans sa propre couche : un peu plus grand que l'écran pour le zoom de réveil et l'effet de profondeur
+        wallLayer = FrameLayout(ctx)
+        wallLayer.scaleX = 1.1f
+        wallLayer.scaleY = 1.1f
+        wallLayer.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, preset.colors)
+        root.addView(wallLayer, FrameLayout.LayoutParams(MATCH, MATCH))
+
         val wp = File(ctx.filesDir, "wallpaper.jpg")
         if (wp.exists()) {
             val bmp = try {
@@ -212,39 +247,54 @@ class LockUi(
                 val iv = ImageView(ctx)
                 iv.scaleType = ImageView.ScaleType.CENTER_CROP
                 iv.setImageBitmap(bmp)
-                root.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
+                wallLayer.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
                 val shade = View(ctx)
                 shade.background = GradientDrawable(
                     GradientDrawable.Orientation.TOP_BOTTOM,
                     intArrayOf(0x66000000, 0x00000000, 0x77000000)
                 )
-                root.addView(shade, FrameLayout.LayoutParams(MATCH, MATCH))
+                wallLayer.addView(shade, FrameLayout.LayoutParams(MATCH, MATCH))
             }
         }
 
-        // Taches lumineuses qui flottent (seulement sans fond d'écran perso)
+        // Taches lumineuses qui flottent (fonds de couleur)
         if (!hasWallpaper) {
-            val g1 = GlowView(ctx, 0x99FFB36B.toInt())
-            root.addView(
+            val g1 = GlowView(ctx, preset.glow1)
+            wallLayer.addView(
                 g1,
                 FrameLayout.LayoutParams(dp(420), dp(420), Gravity.TOP or Gravity.END).apply {
                     topMargin = -dp(120)
                     rightMargin = -dp(160)
                 }
             )
-            val g2 = GlowView(ctx, 0x8860A5FA.toInt())
-            root.addView(
+            val g2 = GlowView(ctx, preset.glow2)
+            wallLayer.addView(
                 g2,
                 FrameLayout.LayoutParams(dp(460), dp(460), Gravity.BOTTOM or Gravity.START).apply {
                     bottomMargin = -dp(150)
                     leftMargin = -dp(170)
                 }
             )
+            val g3 = GlowView(ctx, preset.glow1 and 0x00FFFFFF or 0x66000000)
+            wallLayer.addView(
+                g3,
+                FrameLayout.LayoutParams(dp(300), dp(300), Gravity.CENTER_VERTICAL or Gravity.START).apply {
+                    leftMargin = -dp(120)
+                }
+            )
             floatLoop(g1, View.TRANSLATION_X, -dpf(70f), 9000)
             floatLoop(g1, View.TRANSLATION_Y, dpf(60f), 11000)
             floatLoop(g2, View.TRANSLATION_X, dpf(80f), 10000)
             floatLoop(g2, View.TRANSLATION_Y, -dpf(70f), 12000)
+            floatLoop(g3, View.TRANSLATION_X, dpf(260f), 14000)
+            floatLoop(g3, View.TRANSLATION_Y, dpf(120f), 13000)
         }
+
+        // Voile sombre qui apparaît derrière le clavier du code
+        dimView = View(ctx)
+        dimView.setBackgroundColor(0x66000000)
+        dimView.alpha = 0f
+        root.addView(dimView, FrameLayout.LayoutParams(MATCH, MATCH))
 
         // ---- Écran principal (heure, date, boutons)
         lockLayer = FrameLayout(ctx)
@@ -269,9 +319,13 @@ class LockUi(
         val time = TextClock(ctx).apply {
             format12Hour = "h:mm"
             format24Hour = "H:mm"
-            setTextColor(0xF2FFFFFF.toInt())
+            setTextColor(Wallpapers.clockColors[Prefs.clockColor(ctx).coerceIn(0, Wallpapers.clockColors.size - 1)].second)
             textSize = Prefs.clockSize(ctx).toFloat()
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = Typeface.create(
+                Typeface.create("sans-serif", Typeface.NORMAL),
+                Wallpapers.clockWeights[Prefs.clockWeight(ctx).coerceIn(0, Wallpapers.clockWeights.size - 1)].second,
+                false
+            )
             includeFontPadding = false
             letterSpacing = -0.02f
             gravity = Gravity.CENTER
@@ -282,6 +336,16 @@ class LockUi(
             header,
             FrameLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(Prefs.clockTop(ctx)) }
         )
+
+        battery = BatteryView(ctx)
+        lockLayer.addView(
+            battery,
+            FrameLayout.LayoutParams(dp(25), dp(12), Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(16)
+                rightMargin = dp(28)
+            }
+        )
+        updateBattery()
 
         torchBtn = ControlButton(ctx, ControlButton.TORCH) { toggleTorch() }
         camBtn = ControlButton(ctx, ControlButton.CAMERA) { openCamera() }
@@ -376,29 +440,47 @@ class LockUi(
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downY = e.rawY
+                    downX = e.rawX
+                    axis = 0
                     tracker?.recycle()
                     tracker = VelocityTracker.obtain()
                     tracker?.addMovement(e)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     tracker?.addMovement(e)
-                    applyDrag((downY - e.rawY).coerceAtLeast(0f))
+                    val dx = e.rawX - downX
+                    val dyy = downY - e.rawY
+                    if (axis == 0 && (Math.abs(dx) > dp(10) || Math.abs(dyy) > dp(10))) {
+                        axis = if (Math.abs(dx) > Math.abs(dyy)) 2 else 1
+                    }
+                    if (axis == 1) {
+                        applyDrag(dyy.coerceAtLeast(0f))
+                    } else if (axis == 2) {
+                        val m = Math.min(0f, dx)
+                        lockLayer.translationX = m * 0.6f
+                        camHint(m)
+                    }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     tracker?.addMovement(e)
                     tracker?.computeCurrentVelocity(1000)
                     val vy = tracker?.yVelocity ?: 0f
+                    val vx = tracker?.xVelocity ?: 0f
                     tracker?.recycle()
                     tracker = null
                     val dy = downY - e.rawY
-                    val fast = vy < -1500f && dy > dp(30)
-                    if (e.actionMasked == MotionEvent.ACTION_UP &&
-                        (dy > root.height * 0.2f || fast)
+                    val dx = e.rawX - downX
+                    val up = e.actionMasked == MotionEvent.ACTION_UP
+                    if (axis == 2 && up && (dx < -root.width * 0.3f || (vx < -1400f && dx < -dp(40)))) {
+                        openCamera()
+                    } else if (axis == 1 && up &&
+                        (dy > root.height * 0.2f || (vy < -1500f && dy > dp(30)))
                     ) {
                         openCode()
                     } else {
                         resetDrag()
                     }
+                    axis = 0
                 }
             }
             true
@@ -609,6 +691,9 @@ class LockUi(
 
     /** État de départ de l'animation de réveil, posé pendant que l'écran est éteint. */
     private fun prepareIntro() {
+        wallLayer.scaleX = 1.2f
+        wallLayer.scaleY = 1.2f
+        battery.alpha = 0f
         lockIcon.lift = 1f
         codeLock.lift = 0f
         header.alpha = 0f
@@ -627,6 +712,11 @@ class LockUi(
     fun playIntro() {
         if (!::lockIcon.isInitialized || unlocking) return
         lockIcon.animateTo(0f, 420)
+        updateBattery()
+        wallLayer.animate().setStartDelay(0).scaleX(1.1f).scaleY(1.1f).setDuration(1000)
+            .setInterpolator(DecelerateInterpolator(2f)).start()
+        battery.animate().setStartDelay(150).alpha(1f).setDuration(400).start()
+        startParallax()
 
         header.animate().setStartDelay(0).alpha(1f).translationY(0f).setDuration(520)
             .setInterpolator(DecelerateInterpolator(2f)).start()
@@ -659,13 +749,18 @@ class LockUi(
         if (savedCode.isNotEmpty() && !faceOk) {
             codeLayer.visibility = View.VISIBLE
             codeLayer.alpha = p * p
+            dimView.alpha = p
             codeLayer.translationY = dpf(40f) * (1f - p)
         }
     }
 
     private fun resetDrag() {
-        lockLayer.animate().setStartDelay(0).translationY(0f).alpha(1f).scaleX(1f).scaleY(1f)
+        lockLayer.animate().setStartDelay(0).translationX(0f).translationY(0f).alpha(1f).scaleX(1f).scaleY(1f)
             .setDuration(380).setInterpolator(OvershootInterpolator(1.1f)).start()
+        camBtn.alpha = 1f
+        camBtn.scaleX = 1f
+        camBtn.scaleY = 1f
+        if (!codeMode) dimView.animate().setStartDelay(0).alpha(0f).setDuration(200).start()
         if (savedCode.isNotEmpty()) {
             codeLayer.animate().setStartDelay(0).alpha(0f).setDuration(200)
                 .withEndAction { if (!codeMode) codeLayer.visibility = View.GONE }.start()
@@ -680,6 +775,7 @@ class LockUi(
         }
         stopFace()
         codeMode = true
+        blurTo(true)
         codeLayer.visibility = View.VISIBLE
         lockLayer.animate().setStartDelay(0).translationY(-dpf(80f)).alpha(0f)
             .scaleX(0.94f).scaleY(0.94f).setDuration(300)
@@ -690,6 +786,7 @@ class LockUi(
 
     private fun closeCode() {
         codeMode = false
+        blurTo(false)
         typed.setLength(0)
         updateDots()
         actionText.text = "Annuler"
@@ -820,10 +917,70 @@ class LockUi(
 
     // ------------------------------------------------------------------ Déverrouillage
 
+    private fun camHint(dx: Float) {
+        val p = (-dx / (root.width * 0.35f).coerceAtLeast(1f)).coerceIn(0f, 1f)
+        camBtn.alpha = 1f
+        camBtn.scaleX = 1f + p * 0.4f
+        camBtn.scaleY = 1f + p * 0.4f
+    }
+
+    private fun updateBattery() {
+        try {
+            val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            battery.set(bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY), bm.isCharging)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun startParallax() {
+        if (!Prefs.parallax(ctx)) return
+        try {
+            val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+            val acc = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) ?: return
+            sensorMgr = sm
+            sm.registerListener(sensorListener, acc, SensorManager.SENSOR_DELAY_GAME)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun stopParallax() {
+        try {
+            sensorMgr?.unregisterListener(sensorListener)
+        } catch (e: Exception) {
+        }
+        sensorMgr = null
+    }
+
+    /** Flou et assombrissement du fond derrière le clavier, comme sur iOS. */
+    private fun blurTo(on: Boolean) {
+        dimView.animate().setStartDelay(0).alpha(if (on) 1f else 0f).setDuration(320).start()
+        if (Build.VERSION.SDK_INT < 31 || !Prefs.blur(ctx)) return
+        blurAnim?.cancel()
+        val from = if (on) 0f else 34f
+        val to = if (on) 34f else 0f
+        blurAnim = ValueAnimator.ofFloat(from, to).apply {
+            duration = 340
+            addUpdateListener {
+                val r = it.animatedValue as Float
+                if (r < 1f) {
+                    wallLayer.setRenderEffect(null)
+                } else {
+                    wallLayer.setRenderEffect(RenderEffect.createBlurEffect(r, r, Shader.TileMode.CLAMP))
+                }
+            }
+            start()
+        }
+    }
+
     private fun unlock() {
         if (unlocking) return
         unlocking = true
         stopFace()
+        stopParallax()
+        lockLayer.animate().setStartDelay(0).translationY(-dpf(110f)).setDuration(380)
+            .setInterpolator(AccelerateInterpolator(1.3f)).start()
+        codeLayer.animate().setStartDelay(0).translationY(-dpf(110f)).setDuration(380)
+            .setInterpolator(AccelerateInterpolator(1.3f)).start()
         val icon = if (codeMode) codeLock else lockIcon
         icon.animateTo(1f, 260)
         handler.postDelayed({
@@ -856,9 +1013,12 @@ class LockUi(
         stopFace()
         handler.removeCallbacksAndMessages(null)
         camMsg.visibility = View.GONE
-        camLayer.alpha = 0f
+        camLayer.alpha = 1f
+        camLayer.translationX = root.width.toFloat()
         camLayer.visibility = View.VISIBLE
-        camLayer.animate().setStartDelay(0).alpha(1f).setDuration(220).start()
+        camLayer.animate().setStartDelay(0).translationX(0f).setDuration(320)
+            .setInterpolator(DecelerateInterpolator(1.6f)).start()
+        resetDrag()
         if (ctx.checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             camMsg.text = "Autorise la caméra dans l'appli « Écran iOS » pour prendre des photos ici."
             camMsg.visibility = View.VISIBLE
@@ -932,7 +1092,8 @@ class LockUi(
         } catch (e: Exception) {
         }
         imageCapture = null
-        camLayer.animate().setStartDelay(0).alpha(0f).setDuration(200)
+        camLayer.animate().setStartDelay(0).translationX(root.width.toFloat()).setDuration(280)
+            .setInterpolator(AccelerateInterpolator(1.4f))
             .withEndAction { if (!cameraOpen) camLayer.visibility = View.GONE }.start()
         handler.postDelayed({ startFace() }, 300)
     }
@@ -945,6 +1106,7 @@ class LockUi(
         }
         imageCapture = null
         camLayer.animate().cancel()
+        camLayer.translationX = 0f
         camLayer.visibility = View.GONE
     }
 }
