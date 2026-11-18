@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Le Coffre</title>
+<style>
+  :root {
+    --bg: #0c0e12;
+    --panel: #151922;
+    --line: #2a3142;
+    --text: #e9e6dd;
+    --mute: #8f96a8;
+    --brass: #d6b25e;
+    --ok: #5ad19a;
+    --off: #3a4152;
+    --danger: #e5675f;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: radial-gradient(1100px 650px at 50% -8%, #1d2434 0, var(--bg) 62%) fixed;
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main {
+    max-width: 520px;
+    margin: 0 auto;
+    min-height: 100vh;
+    padding: max(32px, env(safe-area-inset-top)) 20px max(36px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+  .eyebrow { margin: 0; font-size: 12px; letter-spacing: .22em; text-transform: uppercase; color: var(--brass); text-align: center; }
+  h1 { margin: 4px 0 0; font-size: 34px; font-weight: 650; letter-spacing: -.02em; text-align: center; }
+
+  /* ---- Porte du coffre ---- */
+  #vault { width: min(300px, 78vw); height: auto; display: block; filter: drop-shadow(0 18px 30px rgba(0,0,0,.55)); }
+  .bolt { fill: url(#brass); transition: transform .9s .5s cubic-bezier(.3,1.4,.4,1); transform-box: fill-box; }
+  .locked .bolt-t { transform: translateY(14px); }
+  .locked .bolt-b { transform: translateY(-14px); }
+  .locked .bolt-l { transform: translateX(14px); }
+  .locked .bolt-r { transform: translateX(-14px); }
+  #wheel { transform-origin: 150px 150px; transform: rotate(var(--r, 0deg)); transition: transform 1.5s cubic-bezier(.16,.84,.24,1); }
+  #led { fill: var(--off); transition: fill .6s, filter .6s; }
+  .full #led { fill: var(--ok); filter: drop-shadow(0 0 7px var(--ok)); }
+  .working #led { fill: var(--brass); filter: drop-shadow(0 0 7px var(--brass)); animation: blink .7s infinite alternate; }
+  @keyframes blink { from { opacity: .35; } to { opacity: 1; } }
+
+  /* ---- Texte et boutons ---- */
+  #status { margin: 0; min-height: 3.2em; text-align: center; font-size: 19px; line-height: 1.35; max-width: 22em; }
+  #status small { display: block; margin-top: 6px; font-size: 14px; color: var(--mute); }
+  #status.err { color: var(--danger); }
+  .actions { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  button {
+    font: inherit; cursor: pointer; border-radius: 14px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); padding: 14px 22px; min-height: 48px;
+    transition: transform .12s, border-color .2s, background .2s;
+  }
+  button:hover { border-color: #3b455c; }
+  button:active { transform: scale(.97); }
+  button:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; }
+  button[disabled] { opacity: .45; cursor: default; }
+  .primary { background: linear-gradient(180deg, #e2c272, #b8923f); color: #1b1608; border: 0; font-weight: 650; padding: 15px 28px; }
+  .danger { background: var(--danger); color: #1c0a08; border: 0; font-weight: 650; }
+  input[type=file] { display: none; }
+
+  /* ---- Fenêtres ---- */
+  dialog {
+    width: min(430px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto;
+    border: 1px solid var(--line); border-radius: 20px; background: var(--panel); color: var(--text); padding: 22px;
+  }
+  dialog::backdrop { background: rgba(4,6,10,.72); backdrop-filter: blur(3px); }
+  dialog h2 { margin: 0 0 10px; font-size: 21px; }
+  dialog p { margin: 0 0 12px; color: #c9ccd6; line-height: 1.5; }
+  .file { font-family: ui-monospace, Menlo, monospace; font-size: 13px; background: #0e1118; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; overflow-wrap: anywhere; white-space: pre-line; max-height: 38vh; overflow-y: auto; }
+  .row { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; margin-top: 16px; }
+  .row button { padding: 13px 16px; }
+  .stack { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+  .stack button { width: 100%; }
+  .item { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 10px 12px; background: #0e1118; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 8px; }
+  .item span { overflow-wrap: anywhere; font-size: 14px; }
+  .item small { color: var(--mute); display: block; margin-top: 2px; }
+  .item button { min-height: 40px; padding: 8px 14px; flex: none; }
+  #openlist { max-height: 42vh; overflow-y: auto; }
+
+  details { width: 100%; border-top: 1px solid var(--line); padding-top: 16px; margin-top: auto; color: var(--mute); font-size: 14px; line-height: 1.55; }
+  summary { cursor: pointer; color: var(--text); }
+  details ul { padding-left: 1.2em; margin: 10px 0 0; }
+  details li { margin-bottom: 8px; }
+
+  @media (prefers-reduced-motion: reduce) { #wheel, .bolt, #led { transition: none; animation: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <p class="eyebrow">Chiffré · sur clé</p>
+    <h1>Le Coffre</h1>
+  </div>
+
+  <svg id="vault" viewBox="0 0 300 300" role="img" aria-label="Porte de coffre-fort">
+    <defs>
+      <radialGradient id="steel" cx="35%" cy="28%" r="85%">
+        <stop offset="0" stop-color="#4d566b"/><stop offset=".55" stop-color="#2b3142"/><stop offset="1" stop-color="#161a25"/>
+      </radialGradient>
+      <linearGradient id="brass" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#f1d682"/><stop offset="1" stop-color="#97762c"/>
+      </linearGradient>
+    </defs>
+    <circle cx="150" cy="150" r="146" fill="#10131b" stroke="#2c3345" stroke-width="2"/>
+    <rect class="bolt bolt-t" x="138" y="4" width="24" height="30" rx="5"/>
+    <rect class="bolt bolt-b" x="138" y="266" width="24" height="30" rx="5"/>
+    <rect class="bolt bolt-l" x="4" y="138" width="30" height="24" rx="5"/>
+    <rect class="bolt bolt-r" x="266" y="138" width="30" height="24" rx="5"/>
+    <circle cx="150" cy="150" r="118" fill="url(#steel)" stroke="#59627a" stroke-width="1.5"/>
+    <circle cx="150" cy="150" r="98" fill="none" stroke="#141824" stroke-width="7"/>
+    <circle cx="150" cy="150" r="98" fill="none" stroke="#3b4357" stroke-width="1"/>
+    <g id="wheel" stroke="url(#brass)" stroke-linecap="round">
+      <g stroke-width="8">
+        <line x1="150" y1="150" x2="150" y2="88"/><line x1="150" y1="150" x2="203.6" y2="119"/>
+        <line x1="150" y1="150" x2="203.6" y2="181"/><line x1="150" y1="150" x2="150" y2="212"/>
+        <line x1="150" y1="150" x2="96.4" y2="181"/><line x1="150" y1="150" x2="96.4" y2="119"/>
+      </g>
+      <g fill="url(#brass)" stroke="none">
+        <circle cx="150" cy="82" r="9"/><circle cx="208.9" cy="116" r="9"/><circle cx="208.9" cy="184" r="9"/>
+        <circle cx="150" cy="218" r="9"/><circle cx="91.1" cy="184" r="9"/><circle cx="91.1" cy="116" r="9"/>
+        <circle cx="150" cy="150" r="19"/>
+      </g>
+      <circle cx="150" cy="150" r="7" fill="#1b1608" stroke="none"/>
+    </g>
+    <circle id="led" cx="150" cy="50" r="5.5"/>
+  </svg>
+
+  <p id="status" role="status" aria-live="polite">&nbsp;</p>
+
+  <div class="actions">
+    <button id="pick" class="primary" type="button">Y déposer des fichiers</button>
+    <button id="openkey" type="button">Ouvrir avec une clé</button>
+  </div>
+  <input id="file" type="file" multiple>
+  <input id="keyfile" type="file" accept=".html,.htm,text/html">
+
+  <details>
+    <summary>Comment ça marche</summary>
+    <ul>
+      <li>Tu peux déposer un ou plusieurs fichiers d'un coup. L'appli crée une clé AES-256 au hasard et les chiffre tous avec.</li>
+      <li>Le coffre ne garde jamais cette clé : elle part dans un fichier HTML que tu télécharges avant que les fichiers soient enfermés. Cette clé ouvre tout ce que tu as déposé ensemble.</li>
+      <li>Chaque nouveau dépôt a sa propre clé : tu peux remplir le coffre autant de fois que tu veux.</li>
+      <li>Le coffre ne garde que du texte chiffré. Les noms, les types et les tailles des fichiers sont chiffrés avec eux et le tout est arrondi : il sait seulement s'il est vide ou non.</li>
+      <li>Pour ouvrir : « Ouvrir avec une clé », puis choisis le fichier HTML de la clé. Avec une mauvaise clé, rien ne s'ouvre.</li>
+      <li>Rien n'est envoyé sur internet.</li>
+      <li>À savoir : le texte chiffré reste dans l'appli, sur ce téléphone : la clé seule ne suffit donc pas. Mais celui qui a la clé et accès à l'appli peut ouvrir le coffre : garde la clé à l'abri. Si tu la perds, les fichiers sont perdus pour toujours. Effacer les données de l'appli ou la désinstaller vide le coffre. Les captures d'écran sont bloquées. Les fichiers d'origine restent sur ton appareil tant que tu ne les effaces pas.</li>
+    </ul>
+  </details>
+</main>
+
+<!-- 1. Confirmation du dépôt -->
+<dialog id="confirm">
+  <h2 id="confirmtitle">Enfermer ce fichier ?</h2>
+  <div class="file" id="fileinfo"></div>
+  <p>Tout sera chiffré, puis tu recevras une <strong>clé HTML</strong>. C'est la seule façon de rouvrir le coffre : sans elle, tout est perdu pour toujours.</p>
+  <div class="row">
+    <button id="cancel" type="button">Annuler</button>
+    <button id="go" class="primary" type="button">Chiffrer</button>
+  </div>
+</dialog>
+
+<!-- 2. Récupération de la clé avant d'enfermer -->
+<dialog id="keystep">
+  <h2>Enregistre ta clé</h2>
+  <p id="keytext"></p>
+  <div class="file" id="keyname"></div>
+  <div class="stack">
+    <button id="dlkey" class="primary" type="button">Télécharger la clé</button>
+    <button id="seal" class="danger" type="button" disabled>Enfermer</button>
+    <button id="abort" type="button">Annuler (rien n'est enregistré)</button>
+  </div>
+</dialog>
+
+<!-- 3. Coffre ouvert -->
+<dialog id="opened">
+  <h2>Coffre ouvert</h2>
+  <p id="openedtext">La clé est bonne.</p>
+  <div id="openlist"></div>
+  <div class="stack">
+    <button id="dlall" class="primary" type="button">Tout télécharger</button>
+    <button id="rm" type="button">Retirer du coffre</button>
+    <button id="closeopened" type="button">Fermer</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  'use strict';
+  const MAX = 60 * 1024 * 1024; // 60 Mo au total par dépôt
+  const $ = (id) => document.getElementById(id);
+  const vault = $('vault'), wheel = $('wheel'), status = $('status');
+  const pick = $('pick'), openkey = $('openkey'), input = $('file'), keyinput = $('keyfile');
+  const dConfirm = $('confirm'), dKey = $('keystep'), dOpened = $('opened');
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  let chosen = null, pending = null, opened = null, spin = 0;
+
+  // ---------- Petits outils ----------
+  const b64 = (buf) => {
+    const u = new Uint8Array(buf); let s = '';
+    for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const fingerprint = async (raw) => {
+    const h = new Uint8Array(await crypto.subtle.digest('SHA-256', raw)).slice(0, 4);
+    const x = Array.from(h, (b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+    return x.slice(0, 4) + '-' + x.slice(4);
+  };
+  const fmt = (n) => n < 1024 ? n + ' o' : n < 1048576 ? (n / 1024).toFixed(1) + ' Ko' : (n / 1048576).toFixed(1) + ' Mo';
+  // Dans l'appli Android : enregistrement par morceaux dans Téléchargements. Sinon : téléchargement normal.
+  const download = async (blob, name) => {
+    if (window.AndroidSave) {
+      try {
+        if (!AndroidSave.begin(name, blob.type || 'application/octet-stream')) return false;
+        const CH = 3 * 256 * 1024;
+        for (let o = 0; o < blob.size; o += CH) AndroidSave.chunk(b64(await blob.slice(o, o + CH).arrayBuffer()));
+        return AndroidSave.end() === 'ok';
+      } catch (e) { try { AndroidSave.abort(); } catch (x) {} return false; }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return true;
+  };
+
+  // ---------- Stockage : uniquement du texte chiffré et son vecteur d'initialisation ----------
+  const DB = 'coffre-une-seule-cle', STORE = 'scelles';
+  const openDB = () => new Promise((res, rej) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE, { autoIncrement: true });
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const countRecords = async () => req((await openDB()).transaction(STORE).objectStore(STORE).count());
+  const hasContent = async () => (await countRecords()) > 0;
+  const removeRecord = async (id) => {
+    const db = await openDB();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(id);
+      tx.oncomplete = res;
+      tx.onerror = tx.onabort = () => rej(tx.error);
+    });
+  };
+
+  // ---------- La page « clé » ----------
+  function buildKeyHtml(k, fp, date) {
+    const data = JSON.stringify({ v: 1, k: k, f: fp, d: date });
+    return `<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clé du coffre ${fp}</title>
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(900px 600px at 50% -10%,#1d2434,#0c0e12 65%);color:#e9e6dd;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .card{max-width:420px;text-align:center}
+  .eyebrow{font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:#d6b25e;margin:0}
+  h1{font-size:30px;margin:6px 0 18px}
+  .code{display:inline-block;font:600 26px ui-monospace,Menlo,monospace;letter-spacing:.12em;color:#1b1608;background:linear-gradient(180deg,#e2c272,#b8923f);padding:10px 18px;border-radius:12px}
+  p{color:#c9ccd6;line-height:1.55;margin:18px 0 0}
+  small{display:block;margin-top:22px;color:#8f96a8}
+  svg{width:84px;height:84px;margin-bottom:6px}
+</style></head><body>
+<div class="card">
+  <svg viewBox="0 0 64 64" fill="none" stroke="#d6b25e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="20" cy="32" r="12"/><path d="M32 32h26M50 32v10M42 32v7"/></svg>
+  <p class="eyebrow">Clé du coffre</p>
+  <h1>Ta clé</h1>
+  <span class="code">${fp}</span>
+  <p>Cette page est la clé de ton coffre. Pour l'ouvrir : ouvre le coffre, touche « Ouvrir avec une clé » et choisis ce fichier. Elle ouvre tout ce qui a été déposé en même temps qu'elle.</p>
+  <p>Garde-la à l'abri et ne la partage pas : celui qui l'a, avec accès à ton coffre, peut l'ouvrir. Si tu la perds, les fichiers sont perdus pour toujours.</p>
+  <small>Créée le ${date.slice(0, 10)}</small>
+</div>
+<script type="application/json" id="cle-coffre">${data}<\/script>
+</body></html>`;
+  }
+
+  // ---------- Dépôt : on chiffre en mémoire, la clé part dans un fichier HTML ----------
+  async function prepare(files) {
+    if (!(window.crypto && crypto.subtle)) throw new Error('nocrypto');
+    // Contenu clair = [taille de l'en-tête][en-tête : noms, types, tailles][fichier 1][fichier 2]…[remplissage]
+    const list = files.map((f) => ({ n: f.name, t: f.type || 'application/octet-stream', l: f.size }));
+    const head = enc.encode(JSON.stringify({ f: list }));
+    const len = new Uint8Array(4);
+    new DataView(len.buffer).setUint32(0, head.length);
+    const total = 4 + head.length + files.reduce((s, f) => s + f.size, 0);
+    // Remplissage : la taille stockée est arrondie (au plus ~6 % de plus) pour ne pas révéler la taille exacte
+    const base = Math.max(total, 65536);
+    const q = Math.pow(2, Math.ceil(Math.log2(base))) / 16;
+    const padLen = Math.ceil(base / q) * q - total;
+    const parts = [len, head].concat(files);
+    if (padLen) parts.push(new Uint8Array(padLen));
+    const plain = await new Blob(parts).arrayBuffer();
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain);
+    new Uint8Array(plain).fill(0); // copie en clair effacée de la mémoire
+    const raw = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+    const fp = await fingerprint(raw);
+    const html = buildKeyHtml(b64(raw), fp, new Date().toISOString());
+    raw.fill(0);
+    return { iv, data, fp, keyBlob: new Blob([html], { type: 'text/html' }), keyName: 'cle-du-coffre-' + fp + '.html' };
+  }
+
+  async function store(p) {
+    const db = await openDB();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).add({ iv: p.iv.buffer, data: p.data });
+      tx.oncomplete = res;
+      tx.onerror = tx.onabort = () => rej(tx.error);
+    });
+  }
+
+  // ---------- Ouverture : on lit la clé dans le fichier HTML et on essaie chaque scellé ----------
+  async function readKey(file) {
+    if (!(window.crypto && crypto.subtle)) throw new Error('nocrypto');
+    if (file.size > 200000) throw new Error('badkey');
+    const doc = new DOMParser().parseFromString(await file.text(), 'text/html');
+    const el = doc.getElementById('cle-coffre');
+    if (!el) throw new Error('badkey');
+    let j, raw;
+    try { j = JSON.parse(el.textContent); raw = unb64(j.k); } catch (e) { throw new Error('badkey'); }
+    if (!j || j.v !== 1 || raw.length !== 32) throw new Error('badkey');
+    const fp = await fingerprint(raw);
+    const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['decrypt']);
+    raw.fill(0);
+    return { key, fp };
+  }
+
+  async function tryOpen(key) {
+    const db = await openDB();
+    const ids = await req(db.transaction(STORE).objectStore(STORE).getAllKeys());
+    for (const id of ids) {
+      const rec = await req(db.transaction(STORE).objectStore(STORE).get(id));
+      let plain;
+      try {
+        plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(rec.iv) }, key, rec.data);
+      } catch (e) { continue; } // cette clé n'ouvre pas ce scellé
+      try {
+        const hl = new DataView(plain).getUint32(0);
+        if (hl > plain.byteLength - 4) continue;
+        const meta = JSON.parse(dec.decode(new Uint8Array(plain, 4, hl)));
+        // Nouveau format : meta.f = liste. Ancien format : un seul fichier décrit directement.
+        const list = Array.isArray(meta.f) ? meta.f : [{ n: meta.n, t: meta.t, l: meta.l }];
+        let off = 4 + hl;
+        const files = [];
+        for (const it of list) {
+          const len = Number.isInteger(it.l) ? it.l : plain.byteLength - off;
+          if (len < 0 || off + len > plain.byteLength) throw new Error('corrompu');
+          files.push({ name: String(it.n || 'fichier'), blob: new Blob([plain.slice(off, off + len)], { type: it.t || 'application/octet-stream' }) });
+          off += len;
+        }
+        return { id, files };
+      } catch (e) { continue; }
+    }
+    return null;
+  }
+
+  // ---------- Affichage ----------
+  const setClass = (c) => { vault.classList.remove('full', 'working'); if (c) vault.classList.add(c); };
+  const say = (html, err) => { status.className = err ? 'err' : ''; status.innerHTML = html; };
+  const setBusy = (b) => { pick.disabled = b; openkey.disabled = b; };
+
+  async function refresh() {
+    try {
+      const n = await countRecords();
+      const full = n > 0;
+      vault.classList.toggle('locked', full);
+      setClass(full ? 'full' : '');
+      say(full ? 'Le coffre contient ' + (n > 1 ? n + ' dépôts.' : 'un dépôt.') : 'Le coffre est vide.');
+    } catch (e) {
+      say('Le stockage de l\'appli est bloqué. Le coffre ne peut pas fonctionner.', true);
+      setBusy(true);
+    }
+  }
+
+  const dropPending = () => { pending = null; chosen = null; input.value = ''; };
+
+  // ---------- Dépôt ----------
+  pick.addEventListener('click', () => input.click());
+
+  input.addEventListener('change', () => {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    const total = files.reduce((s, f) => s + f.size, 0);
+    if (total > MAX) {
+      say('C\'est trop gros d\'un coup (maximum ' + fmt(MAX) + ' par dépôt). Fais plusieurs dépôts.', true);
+      input.value = '';
+      return;
+    }
+    chosen = files;
+    const shown = files.slice(0, 8).map((f) => f.name + ' (' + fmt(f.size) + ')');
+    if (files.length > 8) shown.push('… et ' + (files.length - 8) + ' autres');
+    if (files.length > 1) shown.push('Total : ' + fmt(total));
+    $('fileinfo').textContent = shown.join('\n');
+    $('confirmtitle').textContent = files.length > 1 ? 'Enfermer ces ' + files.length + ' fichiers ?' : 'Enfermer ce fichier ?';
+    dConfirm.showModal();
+  });
+
+  $('cancel').addEventListener('click', () => { dConfirm.close(); dropPending(); });
+  dConfirm.addEventListener('cancel', dropPending);
+
+  $('go').addEventListener('click', async () => {
+    const files = chosen;
+    if (!files) return;
+    dConfirm.close();
+    setBusy(true);
+    setClass('working');
+    say('Chiffrement en cours…');
+    try {
+      pending = await prepare(files);
+    } catch (e) {
+      setClass('');
+      say(e && e.message === 'nocrypto'
+        ? 'Ce navigateur bloque le chiffrement. Ouvre cette page avec Chrome.'
+        : 'Le chiffrement a échoué. Rien n\'a été enregistré.', true);
+      setBusy(false);
+      dropPending();
+      return;
+    }
+    chosen = null; input.value = '';
+    $('keyname').textContent = pending.keyName;
+    $('keytext').textContent = 'Tout est chiffré, mais pas encore enfermé. Télécharge ta clé : c\'est la seule façon d\'ouvrir le coffre.';
+    $('seal').disabled = true;
+    dKey.showModal();
+  });
+
+  $('dlkey').addEventListener('click', async () => {
+    if (!pending) return;
+    const ok = await download(pending.keyBlob, pending.keyName);
+    if (!ok) { $('keytext').textContent = 'La clé n\'a pas pu être enregistrée. Réessaie.'; return; }
+    $('keytext').textContent = 'Clé enregistrée dans tes Téléchargements. Mets-la à l\'abri (envoie-la-toi, mets-la sur un autre appareil), puis enferme.';
+    $('seal').disabled = false;
+  });
+
+  const abortDeposit = async () => {
+    dropPending();
+    setBusy(false);
+    await refresh();
+    say('Annulé. Rien n\'a été enregistré.');
+    setTimeout(refresh, 2500);
+  };
+  $('abort').addEventListener('click', () => { dKey.close(); abortDeposit(); });
+  dKey.addEventListener('cancel', abortDeposit);
+
+  $('seal').addEventListener('click', async () => {
+    const p = pending;
+    if (!p) return;
+    dKey.close();
+    try {
+      await store(p);
+    } catch (e) {
+      say('Impossible d\'enfermer. Rien n\'a été enregistré.', true);
+      dropPending(); setClass(''); setBusy(false);
+      return;
+    }
+    dropPending();
+    spin += 540;
+    wheel.style.setProperty('--r', spin + 'deg');
+    vault.classList.add('locked');
+    setClass('full');
+    say('Enfermé.<small>Seule ta clé HTML peut l\'ouvrir.</small>');
+    setBusy(false);
+    setTimeout(refresh, 4500);
+  });
+
+  // ---------- Ouverture ----------
+  openkey.addEventListener('click', () => keyinput.click());
+
+  keyinput.addEventListener('change', async () => {
+    const f = keyinput.files && keyinput.files[0];
+    keyinput.value = '';
+    if (!f) return;
+    setBusy(true);
+    setClass('working');
+    say('Vérification de la clé…');
+    try {
+      if (!(await hasContent())) {
+        setClass('');
+        say('Le coffre est vide : il n\'y a rien à ouvrir.');
+        setBusy(false);
+        return;
+      }
+      const { key, fp } = await readKey(f);
+      const found = await tryOpen(key);
+      if (!found) {
+        await refresh();
+        say('Cette clé n\'ouvre rien dans ce coffre.', true);
+        setBusy(false);
+        return;
+      }
+      opened = found;
+      $('openedtext').textContent = 'La clé ' + fp + ' est bonne : ' + found.files.length + (found.files.length > 1 ? ' fichiers.' : ' fichier.');
+      const list = $('openlist');
+      list.innerHTML = '';
+      found.files.forEach((it) => {
+        const row = document.createElement('div');
+        row.className = 'item';
+        const info = document.createElement('span');
+        info.textContent = it.name;
+        const sz = document.createElement('small');
+        sz.textContent = fmt(it.blob.size);
+        info.appendChild(sz);
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = 'Télécharger';
+        b.addEventListener('click', async () => { b.textContent = (await download(it.blob, it.name)) ? '✓ Enregistré' : 'Échec'; });
+        row.appendChild(info);
+        row.appendChild(b);
+        list.appendChild(row);
+      });
+      $('dlall').hidden = found.files.length < 2;
+      $('dlall').textContent = 'Tout télécharger';
+      $('rm').textContent = 'Retirer du coffre';
+      $('rm').dataset.sure = '';
+      vault.classList.remove('locked');
+      setClass('full');
+      spin -= 540;
+      wheel.style.setProperty('--r', spin + 'deg');
+      say('Coffre ouvert.');
+      dOpened.showModal();
+    } catch (e) {
+      await refresh();
+      say(e && e.message === 'nocrypto'
+        ? 'Ce navigateur bloque le chiffrement. Ouvre cette page avec Chrome.'
+        : 'Ce fichier n\'est pas une clé de coffre.', true);
+      setBusy(false);
+    }
+  });
+
+  $('dlall').addEventListener('click', async () => {
+    if (!opened) return;
+    const b = $('dlall'); let ok = true;
+    for (const it of opened.files) ok = (await download(it.blob, it.name)) && ok;
+    b.textContent = ok ? '✓ Tout enregistré' : 'Certains fichiers ont échoué';
+  });
+
+  $('rm').addEventListener('click', async () => {
+    const b = $('rm');
+    if (!opened) return;
+    if (b.dataset.sure !== '1') {
+      b.dataset.sure = '1';
+      b.textContent = 'Sûr ? Retirer définitivement';
+      return;
+    }
+    try {
+      await removeRecord(opened.id);
+      opened = null;
+      dOpened.close();
+      await refresh();
+      say('Retiré du coffre.');
+      setTimeout(refresh, 3000);
+    } catch (e) {
+      say('Impossible de retirer.', true);
+    }
+  });
+
+  const closeOpened = () => { opened = null; setBusy(false); refresh(); };
+  $('closeopened').addEventListener('click', () => dOpened.close());
+  dOpened.addEventListener('close', closeOpened);
+
+  // Demande au navigateur de ne pas effacer le coffre tout seul
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+  // Bouton « retour » d'Android : ferme la fenêtre ouverte, sinon laisse l'appli se fermer
+  window.coffreBack = () => {
+    if (dOpened.open) { dOpened.close(); return true; }
+    if (dConfirm.open) { $('cancel').click(); return true; }
+    if (dKey.open) { $('abort').click(); return true; }
+    return false;
+  };
+  refresh();
+})();
+</script>
+</body>
+</html>
